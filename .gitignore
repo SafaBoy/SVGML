@@ -1,0 +1,45 @@
+# Local runtime state
+.run/
+*.log
+*.pid
+
+# Secrets / local env
+.env
+.env.local
+
+# Python
+ml-worker/.venv/
+__pycache__/
+*.py[cod]
+
+# Node / Vite
+frontend/node_modules/
+frontend/dist/
+frontend/tsconfig.tsbuildinfo
+
+# Rust
+backend-rust/target/
+
+# Build outputs (binaries are attached to GitHub Releases instead)
+bin/
+dist/
+
+# Generated single-binary bundle artifacts
+backend-go/embedded/frontend/*
+!backend-go/embedded/frontend/.gitkeep
+backend-go/embedded/ml-worker/*
+!backend-go/embedded/ml-worker/.gitkeep
+backend-go/embedded/bin/*
+!backend-go/embedded/bin/.keep
+
+# Runtime gallery data
+data/gallery.json
+
+# Local tooling
+.opencode/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp

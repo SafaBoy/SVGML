@@ -1,0 +1,90 @@
+services:
+  backend-rust:
+    build:
+      context: ./backend-rust
+      dockerfile: Dockerfile
+    container_name: svgml-rust-engine
+    environment:
+      - RUST_PORT=18081
+      - RUST_LOG=svgml_rust_engine=info,tower_http=info
+    expose:
+      - "18081"
+    networks:
+      - svgml-internal
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:18081/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  ml-worker:
+    build:
+      context: ./ml-worker
+      dockerfile: Dockerfile
+    container_name: svgml-ml-worker
+    environment:
+      - ML_PORT=18082
+      - HF_HOME=/app/hf_cache
+      - HF_TOKEN=${HF_TOKEN:-}
+      - HF_EAGER_DOWNLOAD=${HF_EAGER_DOWNLOAD:-false}
+    volumes:
+      - hf_cache:/app/hf_cache
+    expose:
+      - "18082"
+    networks:
+      - svgml-internal
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:18082/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  backend-go:
+    build:
+      context: ./backend-go
+      dockerfile: Dockerfile
+    container_name: svgml-go-gateway
+    environment:
+      - GO_PORT=18080
+      - RUST_ENGINE_URL=http://backend-rust:18081
+      - ML_WORKER_URL=http://ml-worker:18082
+      - DATA_DIR=/app/data
+      - HF_TOKEN=${HF_TOKEN:-}
+    volumes:
+      - gallery_data:/app/data
+    expose:
+      - "18080"
+    networks:
+      - svgml-internal
+    depends_on:
+      - backend-rust
+      - ml-worker
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:18080/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: svgml-frontend
+    ports:
+      - "0.0.0.0:5173:80"
+    networks:
+      - svgml-internal
+    depends_on:
+      - backend-go
+    restart: unless-stopped
+
+networks:
+  svgml-internal:
+    driver: bridge
+
+volumes:
+  hf_cache:
+  gallery_data:

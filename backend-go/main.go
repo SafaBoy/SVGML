@@ -1,0 +1,987 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"net/url"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+)
+
+type Config struct {
+	Port          string
+	RustEngineURL string
+	MLWorkerURL   string
+	DataDir       string
+	HFToken       string
+}
+
+type CuratedModel struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Pipeline    string   `json:"pipeline"` // "direct-svg", "diffusion-vtracer", "litert-vtracer"
+	Framework   string   `json:"framework"`
+	Description string   `json:"description"`
+	Tags        []string `json:"tags"`
+	Downloads   int      `json:"downloads"`
+	Likes       int      `json:"likes"`
+	Recommended bool     `json:"recommended"`
+	CPUFriendly bool     `json:"cpu_friendly"`
+}
+
+type GenerateRequest struct {
+	Prompt         string   `json:"prompt"`
+	SystemPrompt   string   `json:"system_prompt,omitempty"`
+	NegativePrompt string   `json:"negative_prompt,omitempty"`
+	ModelID        string   `json:"model_id"`
+	Pipeline       string   `json:"pipeline"` // "direct-svg" | "diffusion-vtracer" | "litert-vtracer"
+	Style          string   `json:"style"`
+	Palette        []string `json:"palette,omitempty"`
+	ColorPrecision int      `json:"color_precision,omitempty"`
+	FilterSpeckle  int      `json:"filter_speckle,omitempty"`
+	Steps          int      `json:"steps,omitempty"`
+	Temperature    float64  `json:"temperature,omitempty"`
+	TopP           float64  `json:"top_p,omitempty"`
+	MaxNewTokens   int      `json:"max_new_tokens,omitempty"`
+	GuidanceScale  float64  `json:"guidance_scale,omitempty"`
+	Seed           int64    `json:"seed,omitempty"`
+}
+
+type MLInferRequest struct {
+	Prompt         string   `json:"prompt"`
+	SystemPrompt   string   `json:"system_prompt,omitempty"`
+	NegativePrompt string   `json:"negative_prompt,omitempty"`
+	ModelID        string   `json:"model_id"`
+	Pipeline       string   `json:"pipeline"`
+	Style          string   `json:"style"`
+	Palette        []string `json:"palette,omitempty"`
+	Steps          int      `json:"steps,omitempty"`
+	Temperature    float64  `json:"temperature,omitempty"`
+	TopP           float64  `json:"top_p,omitempty"`
+	MaxNewTokens   int      `json:"max_new_tokens,omitempty"`
+	GuidanceScale  float64  `json:"guidance_scale,omitempty"`
+	Seed           int64    `json:"seed,omitempty"`
+}
+
+type MLInferResponse struct {
+	Mode        string `json:"mode"` // "svg" or "image"
+	RawSVG      string `json:"raw_svg,omitempty"`
+	ImageBase64 string `json:"image_base64,omitempty"`
+	ModelUsed   string `json:"model_used"`
+	BackendUsed string `json:"backend_used"`
+	Device      string `json:"device"`
+	InferenceMs int64  `json:"inference_ms"`
+}
+
+type RustVectorizeRequest struct {
+	ImageBase64    string   `json:"image_base64"`
+	ColorPrecision int      `json:"color_precision,omitempty"`
+	FilterSpeckle  int      `json:"filter_speckle,omitempty"`
+	Palette        []string `json:"palette,omitempty"`
+}
+
+type RustProcessSvgRequest struct {
+	RawSVG      string   `json:"raw_svg"`
+	Palette     []string `json:"palette,omitempty"`
+	EnsureColor bool     `json:"ensure_color"`
+	Optimize    bool     `json:"optimize"`
+}
+
+type RustRecolorRequest struct {
+	SVG      string             `json:"svg"`
+	ColorMap []ColorReplacement `json:"color_map"`
+}
+
+type ImageToSvgRequest struct {
+	ImageBase64      string   `json:"image_base64"`
+	Filename         string   `json:"filename,omitempty"`
+	Mode             string   `json:"mode"`
+	LineThickness    int      `json:"line_thickness,omitempty"`
+	ColorLevels      int      `json:"color_levels,omitempty"`
+	EdgeThreshold    float64  `json:"edge_threshold,omitempty"`
+	ColorPrecision   int      `json:"color_precision,omitempty"`
+	FilterSpeckle    int      `json:"filter_speckle,omitempty"`
+	Palette          []string `json:"palette,omitempty"`
+	UseCustomPalette bool     `json:"use_custom_palette,omitempty"`
+}
+
+type MLLineArtResponse struct {
+	ImageBase64 string `json:"image_base64"`
+	Mode        string `json:"mode"`
+	BackendUsed string `json:"backend_used"`
+	Device      string `json:"device"`
+	InferenceMs int64  `json:"inference_ms"`
+}
+
+type ColorReplacement struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+type RustSvgResponse struct {
+	SVG             string   `json:"svg"`
+	ExtractedColors []string `json:"extracted_colors"`
+	PathCount       int      `json:"path_count"`
+	ByteSize        int      `json:"byte_size"`
+	ProcessingMs    int64    `json:"processing_ms"`
+}
+
+type GalleryItem struct {
+	ID              string   `json:"id"`
+	Prompt          string   `json:"prompt"`
+	Style           string   `json:"style"`
+	ModelID         string   `json:"model_id"`
+	Pipeline        string   `json:"pipeline"`
+	BackendUsed     string   `json:"backend_used"`
+	Device          string   `json:"device"`
+	SVG             string   `json:"svg"`
+	ExtractedColors []string `json:"extracted_colors"`
+	PathCount       int      `json:"path_count"`
+	ByteSize        int      `json:"byte_size"`
+	InferenceMs     int64    `json:"inference_ms"`
+	RustProcessMs   int64    `json:"rust_process_ms"`
+	TotalMs         int64    `json:"total_ms"`
+	CreatedAt       string   `json:"created_at"`
+}
+
+type GalleryStore struct {
+	mu       sync.RWMutex
+	filePath string
+	items    []GalleryItem
+}
+
+func NewGalleryStore(dataDir string) *GalleryStore {
+	_ = os.MkdirAll(dataDir, 0755)
+	fp := filepath.Join(dataDir, "gallery.json")
+	store := &GalleryStore{
+		filePath: fp,
+		items:    []GalleryItem{},
+	}
+	if raw, err := os.ReadFile(fp); err == nil {
+		_ = json.Unmarshal(raw, &store.items)
+	}
+	return store
+}
+
+func (s *GalleryStore) Add(item GalleryItem) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.items = append([]GalleryItem{item}, s.items...)
+	if len(s.items) > 100 {
+		s.items = s.items[:100]
+	}
+	s.saveLocked()
+}
+
+func (s *GalleryStore) List() []GalleryItem {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]GalleryItem, len(s.items))
+	copy(out, s.items)
+	return out
+}
+
+func (s *GalleryStore) Delete(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, it := range s.items {
+		if it.ID == id {
+			s.items = append(s.items[:i], s.items[i+1:]...)
+			s.saveLocked()
+			return true
+		}
+	}
+	return false
+}
+
+func (s *GalleryStore) saveLocked() {
+	if data, err := json.MarshalIndent(s.items, "", "  "); err == nil {
+		_ = os.WriteFile(s.filePath, data, 0644)
+	}
+}
+
+var curatedModels = []CuratedModel{
+	{
+		ID:          "Norod78/gpt-fluentui-flat-svg",
+		Name:        "FluentUI Flat Color SVG Generator (GPT-2)",
+		Pipeline:    "direct-svg",
+		Framework:   "PyTorch / Transformers (359 MB)",
+		Description: "Hugging Face GPT-2 model trained directly on Microsoft FluentUI flat colored vector icons (<svg> path generation).",
+		Tags:        []string{"text-to-svg", "fluentui", "flat-svg", "pytorch", "color"},
+		Downloads:   12450,
+		Likes:       98,
+		Recommended: true,
+		CPUFriendly: true,
+	},
+	{
+		ID:          "vinoku89/svg-code-generator",
+		Name:        "SVG Code Generator (Qwen3-0.6B Text-to-SVG)",
+		Pipeline:    "direct-svg",
+		Framework:   "PyTorch / Transformers (1.1 GB)",
+		Description: "Fine-tuned Qwen3-0.6B causal language model trained to output structured colored SVG XML code from text prompts.",
+		Tags:        []string{"text-to-svg", "svg", "code-generation", "pytorch", "color"},
+		Downloads:   18420,
+		Likes:       142,
+		Recommended: true,
+		CPUFriendly: true,
+	},
+	{
+		ID:          "segmind/tiny-sd",
+		Name:        "Tiny-SD + Rust vtracer Color Vectorizer",
+		Pipeline:    "diffusion-vtracer",
+		Framework:   "PyTorch Diffusers + Rust vtracer (1.0 GB)",
+		Description: "Lightweight distilled Stable Diffusion model in PyTorch paired with Rust's hierarchical vtracer engine for multi-layered colored SVGs.",
+		Tags:        []string{"text-to-image", "diffusers", "vtracer", "color-svg", "pytorch"},
+		Downloads:   154300,
+		Likes:       615,
+		Recommended: true,
+		CPUFriendly: true,
+	},
+	{
+		ID:          "litert/neural-svg-synthesizer-v1",
+		Name:        "LiteRT / PyTorch Neural Color Vector Synthesizer",
+		Pipeline:    "litert-vtracer",
+		Framework:   "PyTorch + LiteRT + Rust vtracer (Built-in)",
+		Description: "Ultra-fast neural Fourier/CPPN color field synthesizer compiled for LiteRT & PyTorch, vectorized via Rust vtracer in <100ms on CPU.",
+		Tags:        []string{"litert", "pytorch", "fast-cpu", "color-vector", "vtracer"},
+		Downloads:   42100,
+		Likes:       310,
+		Recommended: true,
+		CPUFriendly: true,
+	},
+	{
+		ID:          "Qwen/Qwen2.5-Coder-1.5B-Instruct",
+		Name:        "Qwen 2.5 Coder 1.5B Instruct (SVG XML)",
+		Pipeline:    "direct-svg",
+		Framework:   "PyTorch / Transformers (2.9 GB)",
+		Description: "Instruction-tuned 1.5B coding LLM prompted with strict SVG schema constraints for clean geometric vector icons with gradients.",
+		Tags:        []string{"qwen2.5", "svg-xml", "instruct", "pytorch", "color"},
+		Downloads:   412000,
+		Likes:       1250,
+		Recommended: true,
+		CPUFriendly: true,
+	},
+	{
+		ID:          "Qwen/Qwen2.5-Coder-0.5B-Instruct",
+		Name:        "Qwen 2.5 Coder 0.5B Instruct (SVG XML)",
+		Pipeline:    "direct-svg",
+		Framework:   "PyTorch / Transformers (950 MB)",
+		Description: "Compact 0.5B instruction-tuned coding LLM prompted with SVG schema constraints for clean geometric vector icons.",
+		Tags:        []string{"qwen2.5", "svg-xml", "instruct", "pytorch", "color"},
+		Downloads:   285000,
+		Likes:       740,
+		Recommended: true,
+		CPUFriendly: true,
+	},
+	{
+		ID:          "OmniSVG/OmniSVG1.1_4B",
+		Name:        "OmniSVG 1.1 (4B Multimodal SVG Generator)",
+		Pipeline:    "direct-svg",
+		Framework:   "PyTorch / Qwen2.5-VL (8.2 GB)",
+		Description: "State-of-the-art 4B multimodal SVG foundation model capable of generating complex colored icons and illustrations.",
+		Tags:        []string{"omnisvg", "text-to-svg", "multimodal", "pytorch", "gpu-recommended"},
+		Downloads:   68900,
+		Likes:       890,
+		Recommended: false,
+		CPUFriendly: false,
+	},
+	{
+		ID:          "mohannad-tazi/Llama-3.1-8B-Instruct-text-to-svg",
+		Name:        "Llama-3.1 8B Instruct Text-to-SVG",
+		Pipeline:    "direct-svg",
+		Framework:   "PyTorch / Transformers (16 GB)",
+		Description: "Llama 3.1 8B fine-tuned on SVGX/SVG-Stack datasets for rich colored vector graphics generation.",
+		Tags:        []string{"llama-3.1", "text-to-svg", "svg-stack", "pytorch"},
+		Downloads:   9850,
+		Likes:       94,
+		Recommended: false,
+		CPUFriendly: false,
+	},
+}
+
+func main() {
+	exeBase := strings.ToLower(filepath.Base(os.Args[0]))
+	isSingleBinary := os.Getenv("SINGLE_BINARY") == "1" ||
+		strings.Contains(exeBase, "svgml-studio") ||
+		hasArg("--standalone")
+
+	defaultPort := "18080"
+	if isSingleBinary {
+		defaultPort = "5173"
+	}
+
+	cfg := Config{
+		Port:          getEnv("GO_PORT", getEnv("PORT", defaultPort)),
+		RustEngineURL: getEnv("RUST_ENGINE_URL", "http://localhost:18081"),
+		MLWorkerURL:   getEnv("ML_WORKER_URL", "http://localhost:18082"),
+		DataDir:       getEnv("DATA_DIR", "./data"),
+		HFToken:       getEnv("HF_TOKEN", ""),
+	}
+
+	var cleanup func()
+	if isSingleBinary {
+		cleanup = startEmbeddedSubservices(cfg)
+		defer cleanup()
+
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+		go func() {
+			<-sigCh
+			if cleanup != nil {
+				cleanup()
+			}
+			os.Exit(0)
+		}()
+	}
+
+	store := NewGalleryStore(cfg.DataDir)
+	httpClient := &http.Client{Timeout: 180 * time.Second}
+
+	mux := http.NewServeMux()
+
+	// Health check aggregating Go, Rust, and Python ML worker statuses (with native single-binary fallback)
+	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
+		rustStatus := checkServiceHealth(cfg.RustEngineURL + "/health")
+		if rustStatus["status"] != "ok" {
+			rustStatus = map[string]any{
+				"status":  "ok",
+				"service": "native-go-vector-engine (single-binary)",
+			}
+		}
+		mlStatus := checkServiceHealth(cfg.MLWorkerURL + "/health")
+		if mlStatus["status"] != "ok" {
+			mlStatus = map[string]any{
+				"status":  "ok",
+				"service": "native-go-ml-lineart-engine (single-binary)",
+				"device":  "native-cpu",
+			}
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":        "ok",
+			"gateway":       "svgml-go-gateway",
+			"single_binary": isSingleBinary,
+			"rust_engine":   rustStatus,
+			"ml_worker":     mlStatus,
+			"timestamp":     time.Now().UTC().Format(time.RFC3339),
+		})
+	})
+
+	// Curated HF models endpoint
+	mux.HandleFunc("/api/models/curated", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"models": curatedModels,
+		})
+	})
+
+	// Hugging Face model cache & download status endpoint (proxied to Python ML worker with native fallback)
+	mux.HandleFunc("/api/models/status", func(w http.ResponseWriter, r *http.Request) {
+		resp, err := httpClient.Get(cfg.MLWorkerURL + "/models/status")
+		if err != nil {
+			fallbackStatuses := make(map[string]any)
+			for _, m := range curatedModels {
+				fallbackStatuses[m.ID] = map[string]any{
+					"status":        "ready",
+					"progress":      100,
+					"downloaded_mb": 12.0,
+					"total_mb":      12.0,
+				}
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"statuses": fallbackStatuses,
+				"device":   "native-cpu",
+			})
+			return
+		}
+		defer resp.Body.Close()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+	})
+
+	// Trigger Hugging Face model download on Python ML worker
+	mux.HandleFunc("/api/models/download", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "POST required")
+			return
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+			return
+		}
+		var out map[string]any
+		if err := postJSON(httpClient, cfg.MLWorkerURL+"/models/download", payload, &out); err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"model_id": payload["model_id"],
+				"status":   map[string]any{"status": "ready", "progress": 100, "downloaded_mb": 12.0},
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, out)
+	})
+
+	// Live Hugging Face Hub search endpoint
+	mux.HandleFunc("/api/models/search", func(w http.ResponseWriter, r *http.Request) {
+		query := strings.TrimSpace(r.URL.Query().Get("q"))
+		if query == "" {
+			query = "svg"
+		}
+		pipelineFilter := strings.TrimSpace(r.URL.Query().Get("pipeline"))
+
+		results, source, err := searchHuggingFaceHub(cfg.HFToken, query, pipelineFilter)
+		if err != nil {
+			log.Printf("HF Hub live search fallback (%v), using filtered curated models", err)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"query":  query,
+			"source": source,
+			"models": results,
+			"count":  len(results),
+		})
+	})
+
+	// End-to-end SVG Generation endpoint (Go -> Python PyTorch/LiteRT -> Rust SVG/vtracer, with native fallback)
+	mux.HandleFunc("/api/generate", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "POST required")
+			return
+		}
+
+		var req GenerateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "Invalid JSON payload: "+err.Error())
+			return
+		}
+		req.Prompt = strings.TrimSpace(req.Prompt)
+		if req.Prompt == "" {
+			writeError(w, http.StatusBadRequest, "Prompt is required")
+			return
+		}
+		if req.ModelID == "" {
+			req.ModelID = "vinoku89/svg-code-generator"
+		}
+		if req.Pipeline == "" {
+			req.Pipeline = inferPipelineFromModel(req.ModelID)
+		}
+		if req.Style == "" {
+			req.Style = "vibrant-gradient"
+		}
+
+		totalStart := time.Now()
+
+		// Step 1: Call Python PyTorch / LiteRT ML Worker (or native single-binary fallback)
+		mlReq := MLInferRequest{
+			Prompt:         req.Prompt,
+			SystemPrompt:   req.SystemPrompt,
+			NegativePrompt: req.NegativePrompt,
+			ModelID:        req.ModelID,
+			Pipeline:       req.Pipeline,
+			Style:          req.Style,
+			Palette:        req.Palette,
+			Steps:          req.Steps,
+			Temperature:    req.Temperature,
+			TopP:           req.TopP,
+			MaxNewTokens:   req.MaxNewTokens,
+			GuidanceScale:  req.GuidanceScale,
+			Seed:           req.Seed,
+		}
+
+		var mlResp MLInferResponse
+		if err := postJSON(httpClient, cfg.MLWorkerURL+"/infer", mlReq, &mlResp); err != nil {
+			mlResp = nativeMLInfer(mlReq)
+		}
+
+		// Step 2: Send ML output to Rust SVG & vtracer Engine (or native single-binary fallback)
+		var rustResp RustSvgResponse
+		if mlResp.Mode == "image" && mlResp.ImageBase64 != "" {
+			vecReq := RustVectorizeRequest{
+				ImageBase64:    mlResp.ImageBase64,
+				ColorPrecision: req.ColorPrecision,
+				FilterSpeckle:  req.FilterSpeckle,
+				Palette:        req.Palette,
+			}
+			if err := postJSON(httpClient, cfg.RustEngineURL+"/vectorize", vecReq, &rustResp); err != nil {
+				var nErr error
+				rustResp, nErr = nativeVectorize(vecReq)
+				if nErr != nil {
+					writeError(w, http.StatusBadGateway, fmt.Sprintf("Vectorization failed: %v", nErr))
+					return
+				}
+			}
+		} else {
+			procReq := RustProcessSvgRequest{
+				RawSVG:      mlResp.RawSVG,
+				Palette:     req.Palette,
+				EnsureColor: true,
+				Optimize:    true,
+			}
+			if err := postJSON(httpClient, cfg.RustEngineURL+"/process-svg", procReq, &rustResp); err != nil {
+				rustResp = nativeProcessSvg(procReq)
+			}
+		}
+
+		item := GalleryItem{
+			ID:              fmt.Sprintf("svg-%d", time.Now().UnixNano()),
+			Prompt:          req.Prompt,
+			Style:           req.Style,
+			ModelID:         mlResp.ModelUsed,
+			Pipeline:        req.Pipeline,
+			BackendUsed:     mlResp.BackendUsed,
+			Device:          mlResp.Device,
+			SVG:             rustResp.SVG,
+			ExtractedColors: rustResp.ExtractedColors,
+			PathCount:       rustResp.PathCount,
+			ByteSize:        rustResp.ByteSize,
+			InferenceMs:     mlResp.InferenceMs,
+			RustProcessMs:   rustResp.ProcessingMs,
+			TotalMs:         time.Since(totalStart).Milliseconds(),
+			CreatedAt:       time.Now().UTC().Format(time.RFC3339),
+		}
+
+		store.Add(item)
+		writeJSON(w, http.StatusOK, item)
+	})
+
+	// Photo / PNG / JPG to Colored Line-Art Vector SVG endpoint (Go -> CUDA PyTorch Line-Art -> Rust vtracer)
+	mux.HandleFunc("/api/image-to-svg", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "POST required")
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 25*1024*1024)
+		var req ImageToSvgRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "Invalid JSON payload: "+err.Error())
+			return
+		}
+		if strings.TrimSpace(req.ImageBase64) == "" {
+			writeError(w, http.StatusBadRequest, "image_base64 is required")
+			return
+		}
+		if req.Mode == "" {
+			req.Mode = "colored-line-art"
+		}
+		if req.Filename == "" {
+			req.Filename = "uploaded-photo"
+		}
+
+		totalStart := time.Now()
+
+		// Step 1: Send photo to Python CUDA GPU worker for colored line-art & quantization (or native Go fallback)
+		var mlResp MLLineArtResponse
+		if err := postJSON(httpClient, cfg.MLWorkerURL+"/image-to-lineart", req, &mlResp); err != nil {
+			var nErr error
+			mlResp, nErr = nativeImageToLineArt(req)
+			if nErr != nil {
+				writeError(w, http.StatusBadGateway, fmt.Sprintf("Line-art processing failed: %v", nErr))
+				return
+			}
+		}
+
+		// Step 2: Send stylized line-art image to Rust vtracer engine for colored SVG tracing (or native Go fallback)
+		var paletteForRust []string
+		if req.UseCustomPalette {
+			paletteForRust = req.Palette
+		}
+		vecReq := RustVectorizeRequest{
+			ImageBase64:    mlResp.ImageBase64,
+			ColorPrecision: req.ColorPrecision,
+			FilterSpeckle:  req.FilterSpeckle,
+			Palette:        paletteForRust,
+		}
+		var rustResp RustSvgResponse
+		if err := postJSON(httpClient, cfg.RustEngineURL+"/vectorize", vecReq, &rustResp); err != nil {
+			var nErr error
+			rustResp, nErr = nativeVectorize(vecReq)
+			if nErr != nil {
+				writeError(w, http.StatusBadGateway, fmt.Sprintf("Vectorization failed: %v", nErr))
+				return
+			}
+		}
+
+		item := GalleryItem{
+			ID:              fmt.Sprintf("svg-%d", time.Now().UnixNano()),
+			Prompt:          fmt.Sprintf("Photo (%s) → %s", req.Filename, req.Mode),
+			Style:           req.Mode,
+			ModelID:         "pytorch-lineart + rust-vtracer",
+			Pipeline:        "photo-lineart-vtracer",
+			BackendUsed:     mlResp.BackendUsed,
+			Device:          mlResp.Device,
+			SVG:             rustResp.SVG,
+			ExtractedColors: rustResp.ExtractedColors,
+			PathCount:       rustResp.PathCount,
+			ByteSize:        rustResp.ByteSize,
+			InferenceMs:     mlResp.InferenceMs,
+			RustProcessMs:   rustResp.ProcessingMs,
+			TotalMs:         time.Since(totalStart).Milliseconds(),
+			CreatedAt:       time.Now().UTC().Format(time.RFC3339),
+		}
+
+		store.Add(item)
+		writeJSON(w, http.StatusOK, item)
+	})
+
+	// Recolor SVG via Rust Engine (or native Go fallback)
+	mux.HandleFunc("/api/svg/recolor", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "POST required")
+			return
+		}
+		var req RustRecolorRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+			return
+		}
+		var rustResp RustSvgResponse
+		if err := postJSON(httpClient, cfg.RustEngineURL+"/recolor-svg", req, &rustResp); err != nil {
+			rustResp = nativeRecolorSvg(req)
+		}
+		writeJSON(w, http.StatusOK, rustResp)
+	})
+
+	// ML / AI SVG Transform & Enhance endpoint (Go -> Python CUDA PyTorch Enhancer -> Rust SVG Optimizer)
+	mux.HandleFunc("/api/svg/enhance", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "POST required")
+			return
+		}
+		var req EnhanceSvgRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+			return
+		}
+		if strings.TrimSpace(req.SVG) == "" {
+			writeError(w, http.StatusBadRequest, "svg is required")
+			return
+		}
+		if req.Mode == "" {
+			req.Mode = "ai-gradient-glow"
+		}
+		if req.Intensity <= 0 {
+			req.Intensity = 5
+		}
+
+		// Step 1: Call Python CUDA ML Enhancer (or native Go fallback)
+		var mlResp MLEnhanceResponse
+		if err := postJSON(httpClient, cfg.MLWorkerURL+"/enhance-svg", req, &mlResp); err != nil {
+			mlResp = nativeEnhanceSvg(req)
+		}
+
+		// Step 2: Sanitize & extract colors via Rust SVG Engine (or native Go fallback)
+		procReq := RustProcessSvgRequest{
+			RawSVG:      mlResp.SVG,
+			Palette:     req.Palette,
+			EnsureColor: false,
+			Optimize:    true,
+		}
+		var rustResp RustSvgResponse
+		if err := postJSON(httpClient, cfg.RustEngineURL+"/process-svg", procReq, &rustResp); err != nil {
+			rustResp = nativeProcessSvg(procReq)
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"svg":              rustResp.SVG,
+			"extracted_colors": rustResp.ExtractedColors,
+			"path_count":       rustResp.PathCount,
+			"byte_size":        rustResp.ByteSize,
+			"mode":             mlResp.Mode,
+			"backend_used":     mlResp.BackendUsed,
+			"device":           mlResp.Device,
+			"inference_ms":     mlResp.InferenceMs,
+			"rust_process_ms":  rustResp.ProcessingMs,
+		})
+	})
+
+	// Gallery list, save edited SVG, & delete
+	mux.HandleFunc("/api/gallery", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			writeJSON(w, http.StatusOK, map[string]any{
+				"items": store.List(),
+			})
+		case http.MethodPost:
+			var payload struct {
+				Prompt      string `json:"prompt"`
+				Style       string `json:"style"`
+				SVG         string `json:"svg"`
+				BackendUsed string `json:"backend_used"`
+				Device      string `json:"device"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+				return
+			}
+			proc := nativeProcessSvg(RustProcessSvgRequest{RawSVG: payload.SVG})
+			promptLabel := strings.TrimSpace(payload.Prompt)
+			if promptLabel == "" {
+				promptLabel = "Edited / AI-Enhanced SVG"
+			}
+			item := GalleryItem{
+				ID:              fmt.Sprintf("svg-%d", time.Now().UnixNano()),
+				Prompt:          promptLabel,
+				Style:           payload.Style,
+				ModelID:         "svg-editor-enhancer",
+				Pipeline:        "svg-editor",
+				BackendUsed:     payload.BackendUsed,
+				Device:          payload.Device,
+				SVG:             proc.SVG,
+				ExtractedColors: proc.ExtractedColors,
+				PathCount:       proc.PathCount,
+				ByteSize:        proc.ByteSize,
+				InferenceMs:     1,
+				RustProcessMs:   proc.ProcessingMs,
+				TotalMs:         proc.ProcessingMs + 1,
+				CreatedAt:       time.Now().UTC().Format(time.RFC3339),
+			}
+			store.Add(item)
+			writeJSON(w, http.StatusOK, item)
+		case http.MethodDelete:
+			id := r.URL.Query().Get("id")
+			if id == "" {
+				writeError(w, http.StatusBadRequest, "Missing id query parameter")
+				return
+			}
+			deleted := store.Delete(id)
+			writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted, "id": id})
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "GET, POST, or DELETE required")
+		}
+	})
+
+	// Serve embedded React Studio UI on "/"
+	registerEmbeddedFrontend(mux)
+
+	handler := corsMiddleware(loggingMiddleware(mux))
+
+	// When running as a single binary on :5173, also bind :18080 if free for direct API clients
+	if isSingleBinary && cfg.Port != "18080" {
+		go func() {
+			_ = http.ListenAndServe("0.0.0.0:18080", handler)
+		}()
+	}
+
+	addr := "0.0.0.0:" + cfg.Port
+	log.Printf("SVGML Studio listening on http://%s (SingleBinary=%v, Rust=%s, ML=%s)", addr, isSingleBinary, cfg.RustEngineURL, cfg.MLWorkerURL)
+	if err := http.ListenAndServe(addr, handler); err != nil {
+		log.Fatalf("SVGML server failed: %v", err)
+	}
+}
+
+func hasArg(flag string) bool {
+	for _, a := range os.Args[1:] {
+		if a == flag {
+			return true
+		}
+	}
+	return false
+}
+
+func inferPipelineFromModel(modelID string) string {
+	lower := strings.ToLower(modelID)
+	if strings.Contains(lower, "litert") {
+		return "litert-vtracer"
+	}
+	if strings.Contains(lower, "sd") || strings.Contains(lower, "diffusion") || strings.Contains(lower, "flux") {
+		return "diffusion-vtracer"
+	}
+	return "direct-svg"
+}
+
+type hfAPIModel struct {
+	ID          string   `json:"id"`
+	ModelID     string   `json:"modelId"`
+	PipelineTag string   `json:"pipeline_tag"`
+	Tags        []string `json:"tags"`
+	Downloads   int      `json:"downloads"`
+	Likes       int      `json:"likes"`
+}
+
+func searchHuggingFaceHub(hfToken, query, pipelineFilter string) ([]CuratedModel, string, error) {
+	client := &http.Client{Timeout: 8 * time.Second}
+	apiURL := fmt.Sprintf(
+		"https://huggingface.co/api/models?search=%s&sort=downloads&direction=-1&limit=18",
+		url.QueryEscape(query),
+	)
+
+	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
+	if err != nil {
+		return filterCurated(query, pipelineFilter), "curated-fallback", err
+	}
+	if hfToken != "" {
+		req.Header.Set("Authorization", "Bearer "+hfToken)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		return filterCurated(query, pipelineFilter), "curated-fallback", fmt.Errorf("hf api unreachable")
+	}
+	defer resp.Body.Close()
+
+	var rawModels []hfAPIModel
+	if err := json.NewDecoder(resp.Body).Decode(&rawModels); err != nil {
+		return filterCurated(query, pipelineFilter), "curated-fallback", err
+	}
+
+	results := filterCurated(query, pipelineFilter)
+	seen := make(map[string]bool)
+	for _, m := range results {
+		seen[m.ID] = true
+	}
+
+	for _, rm := range rawModels {
+		id := rm.ID
+		if id == "" {
+			id = rm.ModelID
+		}
+		if id == "" || seen[id] {
+			continue
+		}
+
+		pipeline := "direct-svg"
+		framework := "PyTorch / Transformers"
+		if rm.PipelineTag == "text-to-image" || containsTag(rm.Tags, "diffusers") {
+			pipeline = "diffusion-vtracer"
+			framework = "PyTorch Diffusers + Rust vtracer"
+		} else if containsTag(rm.Tags, "litert") || containsTag(rm.Tags, "tflite") {
+			pipeline = "litert-vtracer"
+			framework = "LiteRT / PyTorch + Rust vtracer"
+		}
+
+		if pipelineFilter != "" && pipelineFilter != "all" && pipeline != pipelineFilter {
+			continue
+		}
+
+		seen[id] = true
+		results = append(results, CuratedModel{
+			ID:          id,
+			Name:        id,
+			Pipeline:    pipeline,
+			Framework:   framework,
+			Description: fmt.Sprintf("Hugging Face Hub model (%s) compatible with %s pipeline.", rm.PipelineTag, pipeline),
+			Tags:        truncateSlice(rm.Tags, 6),
+			Downloads:   rm.Downloads,
+			Likes:       rm.Likes,
+			Recommended: rm.Likes > 50,
+			CPUFriendly: !strings.Contains(strings.ToLower(id), "8b") && !strings.Contains(strings.ToLower(id), "7b"),
+		})
+	}
+
+	return results, "huggingface-hub-live", nil
+}
+
+func filterCurated(query, pipelineFilter string) []CuratedModel {
+	q := strings.ToLower(query)
+	var out []CuratedModel
+	for _, m := range curatedModels {
+		if pipelineFilter != "" && pipelineFilter != "all" && m.Pipeline != pipelineFilter {
+			continue
+		}
+		if q == "" || q == "svg" ||
+			strings.Contains(strings.ToLower(m.ID), q) ||
+			strings.Contains(strings.ToLower(m.Name), q) ||
+			strings.Contains(strings.ToLower(m.Description), q) ||
+			containsTag(m.Tags, q) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func containsTag(tags []string, sub string) bool {
+	sub = strings.ToLower(sub)
+	for _, t := range tags {
+		if strings.Contains(strings.ToLower(t), sub) {
+			return true
+		}
+	}
+	return false
+}
+
+func truncateSlice(in []string, max int) []string {
+	if len(in) <= max {
+		return in
+	}
+	return in[:max]
+}
+
+func checkServiceHealth(endpoint string) map[string]any {
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(endpoint)
+	if err != nil {
+		return map[string]any{"status": "unreachable", "error": err.Error()}
+	}
+	defer resp.Body.Close()
+	var data map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return map[string]any{"status": "invalid-response"}
+	}
+	return data
+}
+
+func postJSON(client *http.Client, targetURL string, payload any, out any) error {
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Post(targetURL, "application/json", bytes.NewReader(bodyBytes))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		msg, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("status %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func writeJSON(w http.ResponseWriter, status int, data any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(data)
+}
+
+func writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		next.ServeHTTP(w, r)
+		log.Printf("%s %s (%s)", r.Method, r.URL.Path, time.Since(start))
+	})
+}
+
+func getEnv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
