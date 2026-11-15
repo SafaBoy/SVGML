@@ -12,19 +12,36 @@ Full-stack AI Scalable Vector Graphics (SVG) generation studio combining **Huggi
                                     │ HTTP / JSON (/api/*)
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                Go API Gateway & HF Hub Manager (:8080)                  │
+│               Go API Gateway & HF Hub Manager (:18080)                  │
 │  • Live Hugging Face Hub Search (/api/models/search) & Curated Registry │
 │  • Pipeline Orchestration (/api/generate) & Gallery Store (data/)       │
 └──────────────────┬───────────────────────────────────┬──────────────────┘
                    │ 1. ML Inference (/infer)          │ 2. Vectorize / Colorize
                    ▼                                   ▼
 ┌──────────────────────────────────────┐  ┌───────────────────────────────┐
-│ Python PyTorch & LiteRT Worker (:8082│  │   Rust SVG Engine (:8081)     │
+│ Python PyTorch & LiteRT (:18082)     │  │ Rust SVG Engine (:18081)      │
 │ • Direct Text-to-SVG HF Transformers │  │ • Hierarchical Color vtracer  │
 │ • Text-to-Image HF Diffusers         │  │ • SVG Sanitization & ViewBox  │
 │ • LiteRT / PyTorch Neural CPPN Field │  │ • Multi-Color Palette Injector│
 └──────────────────────────────────────┘  └───────────────────────────────┘
 ```
+
+## Ports & Configuration
+
+| Service | Default port | Override |
+| --- | --- | --- |
+| React studio (Vite dev / nginx) | `5173` | `VITE_API_PROXY_TARGET` for the dev proxy |
+| Go API Gateway | `18080` | `GO_PORT` (or `PORT`) |
+| Rust SVG engine | `18081` | `RUST_PORT` |
+| Python ML worker | `18082` | `ML_PORT` |
+
+The gateway locates its dependencies through `RUST_ENGINE_URL` and `ML_WORKER_URL`
+(defaults `http://localhost:18081` and `http://localhost:18082`); the Docker network overrides them
+with service names. Other variables: `DATA_DIR` (gallery storage, default `./data`), `HF_TOKEN`,
+`HF_EAGER_DOWNLOAD` (`true` lets the ML worker pull the first uncached multi-GB checkpoint on
+demand; cached checkpoints are used regardless), and `SINGLE_BINARY=1` to run the packaged
+single-binary mode, which serves the UI on `5173` and starts the embedded sub-services itself.
+See `.env.example` for a copy-pasteable set of defaults.
 
 ## Supported Hugging Face Models & Pipelines
 
@@ -66,6 +83,9 @@ Full-stack AI Scalable Vector Graphics (SVG) generation studio combining **Huggi
 
 ### Verification & Stop
 ```bash
+# ML worker unit tests (SVG extraction / model classification, stdlib unittest)
+cd ml-worker && .venv/bin/python -m unittest discover -s tests -t .
+
 # Run end-to-end health and pipeline tests
 ./scripts/test-e2e.sh
 
@@ -73,9 +93,17 @@ Full-stack AI Scalable Vector Graphics (SVG) generation studio combining **Huggi
 ./scripts/stop.sh
 ```
 
+GitHub Actions (`.github/workflows/ci.yml`) runs the same checks on every push and pull request:
+`go build`/`go vet`, `cargo build --release --locked`, the frontend production build, and the ML worker
+unit tests.
+
 ### Degraded mode is explicit
 If the Rust engine or Python ML worker is unreachable, the gateway keeps serving from its in-process Go
 fallbacks but says so: `/api/health` reports `status: "degraded"`, each unavailable service carries
 `fallback: true` with the connection error, `/api/models/status` marks cached models `unavailable` and
 sets `source: "native-fallback"`, and `/api/models/download` returns HTTP 503 instead of pretending a
 download succeeded.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
