@@ -28,11 +28,19 @@ Full-stack AI Scalable Vector Graphics (SVG) generation studio combining **Huggi
 
 ## Supported Hugging Face Models & Pipelines
 
-1. **Direct Text-to-SVG Code Generation (`direct-svg`)**:
-   - `vinoku89/svg-code-generator` (PyTorch / Transformers Causal LM)
-   - `OmniSVG/OmniSVG1.1_4B` (Multimodal 4B SVG Foundation Model)
-   - `Qwen/Qwen2.5-Coder-1.5B-Instruct` (Structured Colored SVG XML)
-   - `mohannad-tazi/Llama-3.1-8B-Instruct-text-to-svg`
+1. **Direct Text-to-SVG Code Generation (`direct-svg`)** — the ML worker loads the checkpoint with
+   `transformers` and decodes SVG markup directly:
+   - `vinoku89/svg-code-generator` (Qwen3-0.6B SVG fine-tune, chat template) — works out of the box
+   - `Qwen/Qwen2.5-Coder-1.5B-Instruct` (instructed colored SVG XML) — works out of the box
+   - `Norod78/gpt-fluentui-flat-svg` (completion-only GPT-2, emits Fluent UI icon markup)
+   - `mohannad-tazi/Llama-3.1-8B-Instruct-text-to-svg` — the Hub repo only stores a LoRA adapter;
+     download the Llama-3.1-8B base model and merge it first
+   - `OmniSVG/OmniSVG1.1_4B` — **not loadable as a plain HF checkpoint**: the repo ships weights only
+     and inference needs OmniSVG's own `SketchDecoder` + `SVGTokenizer` (path tokens, not XML).
+     Selecting it returns an explicit diagnostic instead of a fake result.
+   If no `direct-svg` model can be loaded (not cached, out of memory, or unsupported), the worker
+   generates a deterministic procedural SVG and reports that honestly in `backend_used`
+   (`... | hf skipped: <reason>`), with `model_used = svgml-procedural-templates`.
 2. **Diffusion + Rust Color Vectorization (`diffusion-vtracer`)**:
    - `segmind/tiny-sd` (PyTorch Diffusers -> Rust `vtracer` stacked color splines)
    - `stabilityai/sdxl-turbo` (1-step Diffusion -> Rust `vtracer`)

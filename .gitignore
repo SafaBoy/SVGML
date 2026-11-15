@@ -33,7 +33,7 @@ backend-go/embedded/bin/*
 !backend-go/embedded/bin/.keep
 
 # Runtime gallery data
-data/gallery.json
+**/data/gallery.json
 
 # Local tooling
 .opencode/

@@ -7,6 +7,7 @@ import os
 import re
 import threading
 import time
+import xml.etree.ElementTree as ET
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
@@ -38,7 +39,14 @@ except ImportError:
     DEVICE = "cpu"
 
 try:
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import (
+        AutoConfig,
+        AutoModelForCausalLM,
+        AutoProcessor,
+        AutoTokenizer,
+        StoppingCriteria,
+        StoppingCriteriaList,
+    )
     TRANSFORMERS_AVAILABLE = True
 except ImportError:
     TRANSFORMERS_AVAILABLE = False
@@ -69,7 +77,10 @@ app = FastAPI(title="SVGML PyTorch & LiteRT Inference Worker", version="0.2.0")
 
 # In-memory model cache and download state tracking
 LOADED_TEXT_MODELS: Dict[str, tuple] = {}
+LOADED_VLM_MODELS: Dict[str, tuple] = {}
 LOADED_DIFFUSION_MODELS: Dict[str, object] = {}
+MODEL_DEVICE: Dict[str, str] = {}
+MODEL_CONFIG_CACHE: Dict[str, Any] = {}
 DOWNLOAD_JOBS: Dict[str, Dict[str, Any]] = {}
 DOWNLOAD_LOCK = threading.Lock()
 
@@ -255,7 +266,9 @@ def health():
         "transformers_available": TRANSFORMERS_AVAILABLE,
         "diffusers_available": DIFFUSERS_AVAILABLE,
         "litert_available": LITERT_AVAILABLE,
-        "loaded_models": list(LOADED_TEXT_MODELS.keys()) + list(LOADED_DIFFUSION_MODELS.keys()),
+        "loaded_models": list(LOADED_TEXT_MODELS.keys())
+        + list(LOADED_DIFFUSION_MODELS.keys())
+        + list(LOADED_VLM_MODELS.keys()),
     }
 
 
@@ -278,6 +291,7 @@ def models_status():
                         "loaded_in_memory": (
                             repo.repo_id in LOADED_TEXT_MODELS
                             or repo.repo_id in LOADED_DIFFUSION_MODELS
+                            or repo.repo_id in LOADED_VLM_MODELS
                         ),
                     }
         except Exception as exc:
@@ -300,7 +314,9 @@ def models_status():
                 statuses[mid] = {
                     **job,
                     "loaded_in_memory": (
-                        mid in LOADED_TEXT_MODELS or mid in LOADED_DIFFUSION_MODELS
+                        mid in LOADED_TEXT_MODELS
+                        or mid in LOADED_DIFFUSION_MODELS
+                        or mid in LOADED_VLM_MODELS
                     ),
                 }
 
@@ -410,7 +426,7 @@ def infer(req: InferRequest):
     cached, _ = is_model_cached_locally(req.model_id)
     should_run_hf = (
         req.use_hf_model is not False
-        and (cached or os.getenv("HF_EAGER_DOWNLOAD", "true").lower() == "true")
+        and (cached or os.getenv("HF_EAGER_DOWNLOAD", "false").lower() == "true")
     )
 
     # 1. LiteRT / PyTorch Neural Color Field + Rust vtracer pipeline
@@ -480,10 +496,10 @@ def infer(req: InferRequest):
         )
 
     # 3. Direct Text-to-SVG Code Generation (Hugging Face Transformers / PyTorch)
-    hf_backend_tag = None
+    hf_skip_reason: Optional[str] = None
     if should_run_hf and TRANSFORMERS_AVAILABLE and TORCH_AVAILABLE:
         try:
-            raw_svg, is_complete_scene = run_hf_direct_svg(
+            raw_svg, is_complete_scene, hf_skip_reason = run_hf_direct_svg(
                 req.prompt,
                 req.model_id,
                 req.style,
@@ -494,19 +510,27 @@ def infer(req: InferRequest):
                 req.max_new_tokens if req.max_new_tokens is not None else 512,
                 seed,
             )
-            hf_backend_tag = f"pytorch-hf-transformers ({req.model_id})"
-            if is_complete_scene and "<svg" in raw_svg.lower():
+            if is_complete_scene:
                 elapsed_ms = (time.time_ns() - start_ns) // 1_000_000
                 return InferResponse(
                     mode="svg",
                     raw_svg=raw_svg,
                     model_used=req.model_id,
-                    backend_used=hf_backend_tag,
-                    device=DEVICE,
+                    backend_used=f"pytorch-hf-transformers ({req.model_id})",
+                    device=MODEL_DEVICE.get(req.model_id, DEVICE),
                     inference_ms=elapsed_ms,
                 )
         except Exception as exc:
-            logger.warning("HF Direct SVG model fallback triggered for %s: %s", req.model_id, exc)
+            hf_skip_reason = f"{type(exc).__name__}: {exc}"
+    elif not should_run_hf:
+        hf_skip_reason = (
+            f"{req.model_id} is not in the local Hugging Face cache "
+            "(download it first or set HF_EAGER_DOWNLOAD=true)"
+        )
+    elif not TRANSFORMERS_AVAILABLE:
+        hf_skip_reason = "transformers is not installed"
+    elif not TORCH_AVAILABLE:
+        hf_skip_reason = "torch is not installed"
 
     svg_code, backend_label = generate_pytorch_semantic_colored_svg(
         req.prompt,
@@ -516,17 +540,212 @@ def infer(req: InferRequest):
         temperature=req.temperature if req.temperature is not None else 0.75,
         system_prompt=req.system_prompt,
     )
-    if hf_backend_tag:
-        backend_label = hf_backend_tag
     elapsed_ms = (time.time_ns() - start_ns) // 1_000_000
+    if hf_skip_reason:
+        backend_label = f"{backend_label} | hf skipped: {short_reason(hf_skip_reason)}"
     return InferResponse(
         mode="svg",
         raw_svg=svg_code,
-        model_used=req.model_id,
+        model_used="svgml-procedural-templates",
         backend_used=backend_label,
         device=DEVICE,
         inference_ms=elapsed_ms,
     )
+
+
+OMNISVG_HINT = (
+    "OmniSVG checkpoints are SVG path-token weights, not Hugging Face text checkpoints: "
+    "they require the OmniSVG SketchDecoder + SVGTokenizer (github.com/OmniSVG/OmniSVG) "
+    "plus the Qwen2.5-VL-3B-Instruct processor"
+)
+
+SVG_OPEN_RE = re.compile(r"<svg\b", re.IGNORECASE)
+THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think\s*>", re.IGNORECASE | re.DOTALL)
+TAG_RE = re.compile(r"<(\/?)([A-Za-z][\w:.-]*)([^>]*?)(\/?)>")
+VOID_TAGS = {
+    "area", "base", "br", "col", "embed", "hr", "img", "input",
+    "link", "meta", "param", "source", "track", "wbr",
+}
+SVG_END_TAG = "</svg>"
+
+
+class _StopWhenSvgClosed:
+    """Stop decoding as soon as the model has closed the SVG document."""
+
+    def __init__(self, tokenizer):
+        self.tokenizer = tokenizer
+        self.tail = ""
+
+    def __call__(self, input_ids, scores, **kwargs):
+        token = self.tokenizer.decode(input_ids[0, -1:], skip_special_tokens=True)
+        self.tail = (self.tail + token)[-64:]
+        return SVG_END_TAG in self.tail.lower()
+
+
+def short_reason(text: str, limit: int = 180) -> str:
+    flat = " ".join(str(text).split())
+    return flat if len(flat) <= limit else flat[: limit - 1] + "…"
+
+
+def _close_unclosed_tags(fragment: str) -> str:
+    """Append closing tags for elements the model left open when it ran out of tokens."""
+    stack: List[str] = []
+    for match in TAG_RE.finditer(fragment):
+        closing, name, self_closing = match.group(1), match.group(2), match.group(4)
+        if name.lower() in VOID_TAGS:
+            continue
+        if closing:
+            if stack and stack[-1] == name:
+                stack.pop()
+            elif name in stack:
+                while stack and stack.pop() != name:
+                    pass
+        elif not self_closing:
+            stack.append(name)
+    return fragment + "".join(f"</{name}>" for name in reversed(stack))
+
+
+def extract_svg_document(text: str) -> tuple[str, str]:
+    """Recover a standalone SVG document from raw model text.
+
+    Returns (svg, reason); reason is empty only when the result parses as XML.
+    """
+    if not text or not text.strip():
+        return "", "model returned no text"
+    cleaned = THINK_BLOCK_RE.sub("", text).replace("```xml", "").replace("```svg", "")
+    if "```" in cleaned:
+        cleaned = cleaned.replace("```", "")
+    match = SVG_OPEN_RE.search(cleaned)
+    if not match:
+        return "", "model output contained no <svg> tag"
+    fragment = cleaned[match.start():]
+    end = fragment.lower().rfind(SVG_END_TAG)
+    if end != -1:
+        fragment = fragment[: end + len(SVG_END_TAG)]
+    else:
+        last_gt = fragment.rfind(">")
+        if last_gt == -1:
+            return "", "output ended before the first complete SVG tag"
+        fragment = _close_unclosed_tags(fragment[: last_gt + 1])
+    head_end = fragment.find(">")
+    if "xmlns" not in fragment[:head_end]:
+        fragment = (
+            fragment[:head_end].replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"', 1)
+            + fragment[head_end:]
+        )
+    try:
+        ET.fromstring(fragment)
+    except ET.ParseError as exc:
+        return "", f"generated SVG is not well-formed XML ({exc})"
+    return fragment, ""
+
+
+def hf_model_config(model_id: str) -> Any:
+    if model_id not in MODEL_CONFIG_CACHE:
+        MODEL_CONFIG_CACHE[model_id] = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
+    return MODEL_CONFIG_CACHE[model_id]
+
+
+def classify_hf_model(model_id: str) -> str:
+    """Return "prefix" (completion-only SVG model), "vision" (VLM) or "text" (instruct LM)."""
+    lower = model_id.lower()
+    if "omnisvg" in lower:
+        return "omnisvg"
+    try:
+        config = hf_model_config(model_id)
+    except Exception as exc:
+        raise RuntimeError(
+            f"could not read config.json for {model_id} ({exc}); adapter-only/LoRA repos "
+            "need their base model instead"
+        ) from exc
+    model_type = str(getattr(config, "model_type", "")).lower()
+    architectures = " ".join(getattr(config, "architectures", None) or []).lower()
+    if "vl" in model_type or "vision" in architectures:
+        return "vision"
+    if "gpt-fluentui-flat-svg" in lower or model_type == "gpt2":
+        return "prefix"
+    return "text"
+
+
+def _model_dtype():
+    use_fp16 = CUDA_AVAILABLE and torch.cuda.get_device_capability(0)[0] >= 7
+    return torch.float16 if use_fp16 else torch.float32
+
+
+def _place_model(model: Any, model_id: str) -> str:
+    """Move a model to the GPU, falling back to CPU when the GPU is full."""
+    try:
+        model.to(DEVICE)
+        device = DEVICE
+    except RuntimeError as exc:
+        if DEVICE == "cpu" or "out of memory" not in str(exc).lower():
+            raise
+        logger.warning(
+            "Not enough GPU memory for %s (%s); running it on CPU instead", model_id, exc
+        )
+        torch.cuda.empty_cache()
+        model.to(device="cpu", dtype=torch.float32)
+        device = "cpu"
+    MODEL_DEVICE[model_id] = device
+    return device
+
+
+def load_hf_text_model(model_id: str) -> tuple:
+    if model_id not in LOADED_TEXT_MODELS:
+        logger.info("Loading Hugging Face text-to-SVG model: %s on %s", model_id, DEVICE)
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id, torch_dtype=_model_dtype(), trust_remote_code=True
+        )
+        logger.info("Text-to-SVG model %s placed on %s", model_id, _place_model(model, model_id))
+        model.eval()
+        LOADED_TEXT_MODELS[model_id] = (tokenizer, model)
+    return LOADED_TEXT_MODELS[model_id]
+
+
+def load_hf_vlm(model_id: str) -> tuple:
+    """Load a vision-language SVG model (e.g. a Qwen2.5-VL fine-tune) as a VLM, not a causal LM."""
+    if model_id not in LOADED_VLM_MODELS:
+        try:
+            from transformers import AutoModelForImageTextToText as VLMClass
+        except ImportError:
+            from transformers import AutoModelForVision2Seq as VLMClass  # older transformers
+        logger.info("Loading Hugging Face vision-language model: %s on %s", model_id, DEVICE)
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+        model = VLMClass.from_pretrained(
+            model_id, torch_dtype=_model_dtype(), trust_remote_code=True
+        )
+        logger.info("Vision-language model %s placed on %s", model_id, _place_model(model, model_id))
+        model.eval()
+        LOADED_VLM_MODELS[model_id] = (processor, model)
+    return LOADED_VLM_MODELS[model_id]
+
+
+def _svg_instruction(prompt: str, style: str, palette: List[str]) -> str:
+    return (
+        f"Create a complete standalone SVG illustration for: {prompt}.\n"
+        f"Style: {style}. Use this color palette: {', '.join(palette)}.\n"
+        "Return only the SVG document: start with <svg and end with </svg>."
+    )
+
+
+def _apply_chat_template(holder: Any, system_prompt: str, instruction: str, vision: bool) -> str:
+    if vision:
+        messages = [
+            {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
+            {"role": "user", "content": [{"type": "text", "text": instruction}]},
+        ]
+    else:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": instruction},
+        ]
+    try:
+        return holder.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
+        )
+    except TypeError:
+        return holder.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
 
 def run_hf_direct_svg(
@@ -539,79 +758,79 @@ def run_hf_direct_svg(
     top_p: float,
     max_new_tokens: int,
     seed: int,
-) -> tuple[str, bool]:
-    if model_id not in LOADED_TEXT_MODELS:
-        logger.info("Loading Hugging Face Text-to-SVG model into memory: %s on %s", model_id, DEVICE)
-        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
-        use_fp16 = CUDA_AVAILABLE and torch.cuda.get_device_capability(0)[0] >= 7
-        dtype = torch.float16 if use_fp16 else torch.float32
-        model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            torch_dtype=dtype,
-            trust_remote_code=True,
-            use_safetensors=True,
-        ).to(DEVICE)
-        model.eval()
-        LOADED_TEXT_MODELS[model_id] = (tokenizer, model)
+) -> tuple[str, bool, str]:
+    """Generate SVG code with the selected Hugging Face model.
 
-    tokenizer, model = LOADED_TEXT_MODELS[model_id]
-    torch.manual_seed(seed)
-    lower_id = model_id.lower()
-    sys_msg = (system_prompt or "").strip() or DEFAULT_SYSTEM_PROMPT
-    clamped_max_tokens = max(96, min(int(max_new_tokens or 512), 1024))
+    Returns (svg_document, is_complete, reason). ``reason`` explains why the model
+    output was rejected so the caller can report the fallback truthfully.
+    """
+    kind = classify_hf_model(model_id)
+    if kind == "omnisvg":
+        raise RuntimeError(OMNISVG_HINT)
+
+    max_new = max(128, min(int(max_new_tokens or 512), 4096))
     clamped_temp = max(0.05, min(float(temperature or 0.75), 1.8))
     clamped_top_p = max(0.1, min(float(top_p or 0.92), 1.0))
+    system_message = (system_prompt or "").strip() or DEFAULT_SYSTEM_PROMPT
+    instruction = _svg_instruction(prompt, style, palette)
+    torch.manual_seed(seed)
 
-    # Run a fast GPU latent conditioning pass on the selected Hugging Face model
-    # to modulate the PyTorch Compositional Scene Synthesizer so every object,
-    # action, prop, and companion in the prompt is faithfully rendered in <1s.
-    is_unconditional_or_toy_gpt2 = (
-        "fluentui-flat-svg" in lower_id or "svg-code-generator" in lower_id
-    )
-
-    if is_unconditional_or_toy_gpt2:
-        prompt_text = f"<svg><!-- {prompt[:80]} -->"
-        max_new = 20
-    elif hasattr(tokenizer, "apply_chat_template") and tokenizer.chat_template:
-        palette_str = ", ".join(palette)
-        messages = [
-            {
-                "role": "system",
-                "content": sys_msg,
-            },
-            {
-                "role": "user",
-                "content": f"Create a colorful vector SVG illustration for: {prompt}. Style: {style}. Target color palette: {palette_str}.",
-            },
-        ]
-        prompt_text = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        ) + "<svg"
-        max_new = min(32, clamped_max_tokens)
+    echo_prefix = False
+    if kind == "prefix":
+        # Completion-only models (trained on raw "<svg..." files) cannot follow instructions.
+        tokenizer, model = load_hf_text_model(model_id)
+        echo_prefix = True
+        inputs = tokenizer("<svg", return_tensors="pt")
+    elif kind == "vision":
+        processor, model = load_hf_vlm(model_id)
+        tokenizer = processor.tokenizer
+        rendered = _apply_chat_template(processor, system_message, instruction, vision=True)
+        inputs = processor(text=[rendered], return_tensors="pt")
     else:
-        palette_str = ", ".join(palette)
-        prompt_text = (
-            f"{sys_msg}\n"
-            f"Generate valid, standalone, colorful SVG XML code for: {prompt}. "
-            f"Style: {style}. Use vibrant hex colors ({palette_str}).\n<svg"
-        )
-        max_new = min(32, clamped_max_tokens)
+        tokenizer, model = load_hf_text_model(model_id)
+        rendered = _apply_chat_template(tokenizer, system_message, instruction, vision=False)
+        inputs = tokenizer(rendered, return_tensors="pt")
 
-    inputs = tokenizer(prompt_text, return_tensors="pt").to(DEVICE)
-    if "token_type_ids" in inputs and "gpt2" in str(type(model)).lower():
-        inputs.pop("token_type_ids", None)
+    inputs = {key: value.to(MODEL_DEVICE.get(model_id, DEVICE)) for key, value in inputs.items() if hasattr(value, "to")}
+    input_len = inputs["input_ids"].shape[-1]
+    pad_token_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
 
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=max_new,
-            temperature=clamped_temp,
-            do_sample=True,
-            top_p=clamped_top_p,
-            pad_token_id=tokenizer.eos_token_id,
+    def generate_once():
+        with torch.no_grad():
+            return model.generate(
+                **inputs,
+                max_new_tokens=max_new,
+                do_sample=True,
+                temperature=clamped_temp,
+                top_p=clamped_top_p,
+                pad_token_id=pad_token_id,
+                stopping_criteria=StoppingCriteriaList([_StopWhenSvgClosed(tokenizer)]),
+            )
+
+    try:
+        outputs = generate_once()
+    except RuntimeError as exc:
+        message = str(exc).lower()
+        gpu_failed = any(k in message for k in ("out of memory", "cublas", "cuda error"))
+        if MODEL_DEVICE.get(model_id, DEVICE) == "cpu" or not gpu_failed:
+            raise
+        logger.warning(
+            "GPU generation failed for %s (%s); retrying on CPU", model_id, short_reason(exc)
         )
-    decoded = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    return decoded, False
+        torch.cuda.empty_cache()
+        model.to(device="cpu", dtype=torch.float32)
+        MODEL_DEVICE[model_id] = "cpu"
+        inputs = {key: value.to("cpu") for key, value in inputs.items() if hasattr(value, "to")}
+        outputs = generate_once()
+    decoded = tokenizer.decode(outputs[0][input_len:], skip_special_tokens=True)
+    if echo_prefix:
+        decoded = "<svg" + decoded
+
+    svg_document, reason = extract_svg_document(decoded)
+    if not svg_document:
+        logger.warning("HF model %s produced no usable SVG: %s", model_id, reason)
+        return "", False, reason
+    return svg_document, True, ""
 
 
 def run_hf_diffusion(
@@ -1635,10 +1854,10 @@ def generate_pytorch_semantic_colored_svg(
             f"{256.0 + float(r * torch.cos(a)):.1f},{256.0 + float(r * torch.sin(a)):.1f}"
             for r, a in zip(radii, angles)
         ]
-        backend_label = "pytorch-svg-latent-decoder"
+        backend_label = f"pytorch-template-synthesizer (subject: {subject})"
     else:
         pts = ["256,96", "368,144", "416,256", "368,368", "256,416", "144,368", "96,256", "144,144"]
-        backend_label = "svg-synthesizer"
+        backend_label = f"template-synthesizer (subject: {subject})"
 
     poly_points = " ".join(pts)
 
