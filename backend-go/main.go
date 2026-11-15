@@ -351,23 +351,28 @@ func main() {
 	// Health check aggregating Go, Rust, and Python ML worker statuses (with native single-binary fallback)
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		rustStatus := checkServiceHealth(cfg.RustEngineURL + "/health")
-		if rustStatus["status"] != "ok" {
-			rustStatus = map[string]any{
-				"status":  "ok",
-				"service": "native-go-vector-engine (single-binary)",
-			}
+		rustOK := rustStatus["status"] == "ok"
+		if !rustOK {
+			rustStatus = withFallbackMarkers(map[string]any{
+				"service": "native-go-vector-engine (in-process fallback)",
+			}, rustStatus)
 		}
 		mlStatus := checkServiceHealth(cfg.MLWorkerURL + "/health")
-		if mlStatus["status"] != "ok" {
-			mlStatus = map[string]any{
-				"status":  "ok",
-				"service": "native-go-ml-lineart-engine (single-binary)",
+		mlOK := mlStatus["status"] == "ok"
+		if !mlOK {
+			mlStatus = withFallbackMarkers(map[string]any{
+				"service": "native-go-ml-engine (in-process fallback, no PyTorch)",
 				"device":  "native-cpu",
-			}
+			}, mlStatus)
+		}
+
+		overall := "ok"
+		if !rustOK || !mlOK {
+			overall = "degraded"
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
-			"status":        "ok",
+			"status":        overall,
 			"gateway":       "svgml-go-gateway",
 			"single_binary": isSingleBinary,
 			"rust_engine":   rustStatus,
@@ -387,25 +392,36 @@ func main() {
 	mux.HandleFunc("/api/models/status", func(w http.ResponseWriter, r *http.Request) {
 		resp, err := httpClient.Get(cfg.MLWorkerURL + "/models/status")
 		if err != nil {
-			fallbackStatuses := make(map[string]any)
+			unavailable := make(map[string]any)
 			for _, m := range curatedModels {
-				fallbackStatuses[m.ID] = map[string]any{
-					"status":        "ready",
-					"progress":      100,
-					"downloaded_mb": 12.0,
-					"total_mb":      12.0,
+				unavailable[m.ID] = map[string]any{
+					"status":           "unavailable",
+					"progress":         0,
+					"downloaded_mb":    0.0,
+					"total_mb":         0.0,
+					"loaded_in_memory": false,
+					"error":            "ML worker unreachable: " + err.Error(),
 				}
 			}
 			writeJSON(w, http.StatusOK, map[string]any{
-				"statuses": fallbackStatuses,
-				"device":   "native-cpu",
+				"models": unavailable,
+				"device": "native-cpu",
+				"source": "native-fallback",
 			})
 			return
 		}
 		defer resp.Body.Close()
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(resp.StatusCode)
-		_, _ = io.Copy(w, resp.Body)
+		var payload map[string]any
+		if decodeErr := json.NewDecoder(resp.Body).Decode(&payload); decodeErr != nil {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"models": map[string]any{},
+				"source": "ml-worker",
+				"error":  "invalid /models/status response: " + decodeErr.Error(),
+			})
+			return
+		}
+		payload["source"] = "ml-worker"
+		writeJSON(w, http.StatusOK, payload)
 	})
 
 	// Trigger Hugging Face model download on Python ML worker
@@ -421,10 +437,11 @@ func main() {
 		}
 		var out map[string]any
 		if err := postJSON(httpClient, cfg.MLWorkerURL+"/models/download", payload, &out); err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{
-				"model_id": payload["model_id"],
-				"status":   map[string]any{"status": "ready", "progress": 100, "downloaded_mb": 12.0},
-			})
+			writeError(
+				w,
+				http.StatusServiceUnavailable,
+				"ML worker unreachable, nothing was downloaded: "+err.Error(),
+			)
 			return
 		}
 		writeJSON(w, http.StatusOK, out)
@@ -915,6 +932,17 @@ func truncateSlice(in []string, max int) []string {
 		return in
 	}
 	return in[:max]
+}
+
+// withFallbackMarkers keeps the real probe result visible while recording that the
+// gateway is answering from its in-process Go engines instead of the real service.
+func withFallbackMarkers(fallback map[string]any, probe map[string]any) map[string]any {
+	fallback["status"] = "degraded"
+	fallback["fallback"] = true
+	if detail, ok := probe["error"]; ok {
+		fallback["error"] = detail
+	}
+	return fallback
 }
 
 func checkServiceHealth(endpoint string) map[string]any {

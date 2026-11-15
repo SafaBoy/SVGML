@@ -23,6 +23,7 @@ backend-rust/target/
 # Build outputs (binaries are attached to GitHub Releases instead)
 bin/
 dist/
+backend-go/backend-go
 
 # Generated single-binary bundle artifacts
 backend-go/embedded/frontend/*

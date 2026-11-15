@@ -72,3 +72,10 @@ Full-stack AI Scalable Vector Graphics (SVG) generation studio combining **Huggi
 # Stop all running containers or local background processes
 ./scripts/stop.sh
 ```
+
+### Degraded mode is explicit
+If the Rust engine or Python ML worker is unreachable, the gateway keeps serving from its in-process Go
+fallbacks but says so: `/api/health` reports `status: "degraded"`, each unavailable service carries
+`fallback: true` with the connection error, `/api/models/status` marks cached models `unavailable` and
+sets `source: "native-fallback"`, and `/api/models/download` returns HTTP 503 instead of pretending a
+download succeeded.

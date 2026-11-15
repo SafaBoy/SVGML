@@ -396,6 +396,7 @@ export default function App() {
 
   const [models, setModels] = useState<CuratedModel[]>([]);
   const [modelStatuses, setModelStatuses] = useState<Record<string, ModelStatus>>({});
+  const [modelStatusSource, setModelStatusSource] = useState<string>('ml-worker');
   const [searchQuery, setSearchQuery] = useState('');
   const [customModelId, setCustomModelId] = useState('');
   const [isSearchingHF, setIsSearchingHF] = useState(false);
@@ -467,6 +468,7 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setModelStatuses(data.models || {});
+        setModelStatusSource(data.source || 'ml-worker');
       }
     } catch {
       // ignore
@@ -1015,9 +1017,14 @@ export default function App() {
   };
 
   const activeModelStatus = modelStatuses[selectedModel];
-  const mlDeviceLabel = health?.ml_worker?.gpu_name
-    ? `GPU: ${health.ml_worker.gpu_name}`
-    : `ML Worker (${health?.ml_worker?.device || 'cpu'})`;
+  const mlFallback = health?.ml_worker?.fallback === true;
+  const mlDeviceLabel = !health
+    ? 'ML Worker (offline)'
+    : mlFallback
+      ? 'ML Worker (offline, Go fallback)'
+      : health.ml_worker?.gpu_name
+        ? `GPU: ${health.ml_worker.gpu_name}`
+        : `ML Worker (${health?.ml_worker?.device || 'cpu'})`;
 
   return (
     <div className="min-h-screen w-full overflow-x-hidden flex flex-col bg-slate-950 text-slate-100">
@@ -1041,12 +1048,17 @@ export default function App() {
           {/* Responsive Status Pills */}
           <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 text-[11px] sm:text-xs">
             <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-slate-800/90 border border-slate-700 text-slate-300">
-              <Activity className="w-3 h-3 text-emerald-400 shrink-0" />
-              <span>Go: {health?.status === 'ok' ? 'Online' : '...'}</span>
+              <Activity className={`w-3 h-3 shrink-0 ${health?.status === 'ok' ? 'text-emerald-400' : 'text-amber-400'}`} />
+              <span>
+                Go: {!health ? 'Offline' : health.status === 'ok' ? 'Online' : 'Degraded'}
+              </span>
             </span>
             <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-slate-800/90 border border-slate-700 text-slate-300">
-              <Zap className="w-3 h-3 text-amber-400 shrink-0" />
-              <span>Rust: {health?.rust_engine?.status === 'ok' ? 'Ready' : '...'}</span>
+              <Zap className={`w-3 h-3 shrink-0 ${health?.rust_engine?.status === 'ok' ? 'text-emerald-400' : 'text-amber-400'}`} />
+              <span>
+                Rust:{' '}
+                {!health ? 'Offline' : health.rust_engine?.status === 'ok' ? 'Ready' : 'Go fallback'}
+              </span>
             </span>
             <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-indigo-950/80 border border-indigo-500/50 text-indigo-200 font-medium">
               <Cpu className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
@@ -1793,6 +1805,13 @@ export default function App() {
                 Source: {hfSearchSource}
               </span>
             </div>
+
+            {modelStatusSource === 'native-fallback' && (
+              <p className="text-[11px] px-2.5 py-1.5 rounded-lg bg-amber-950/60 border border-amber-700/60 text-amber-200">
+                ML worker offline — local model cache state is unknown. Model downloads will fail until it
+                is running.
+              </p>
+            )}
 
             {/* Search Hugging Face Hub */}
             <form onSubmit={handleSearchHF} className="flex gap-2">
