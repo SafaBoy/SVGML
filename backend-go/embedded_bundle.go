@@ -2,6 +2,8 @@ package main
 
 import (
 	"embed"
+	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"mime"
@@ -17,6 +19,63 @@ import (
 //go:embed all:embedded
 var embeddedFS embed.FS
 
+// embeddedRustBinaryName is the file name of the Rust engine staged for goos.
+func embeddedRustBinaryName(goos string) string {
+	if goos == "windows" {
+		return "svgml-rust-engine-windows-amd64.exe"
+	}
+	return "svgml-rust-engine-linux-amd64"
+}
+
+// embeddedRustOutputName is the file name the engine is extracted to before launch.
+func embeddedRustOutputName(goos string) string {
+	if goos == "windows" {
+		return "svgml-rust-engine.exe"
+	}
+	return "svgml-rust-engine"
+}
+
+// describeEmbeddedBundle writes an inventory of the assets compiled into this
+// binary, so a shipped build can prove what it actually contains (--self-check).
+func describeEmbeddedBundle(w io.Writer) {
+	fmt.Fprintf(w, "SVGML Studio embedded bundle (%s/%s)\n", runtime.GOOS, runtime.GOARCH)
+	fmt.Fprintf(w, "  rust engine for this platform: %s\n", embeddedRustBinaryName(runtime.GOOS))
+
+	for _, name := range []string{
+		"embedded/bin/svgml-rust-engine-linux-amd64",
+		"embedded/bin/svgml-rust-engine-windows-amd64.exe",
+	} {
+		if data, err := embeddedFS.ReadFile(name); err == nil {
+			fmt.Fprintf(w, "  %-48s %10s\n", name, formatEmbeddedSize(len(data)))
+		} else {
+			fmt.Fprintf(w, "  %-48s %10s\n", name, "missing")
+		}
+	}
+
+	for _, name := range []string{
+		"embedded/frontend/index.html",
+		"embedded/ml-worker/app.py",
+		"embedded/ml-worker/requirements.txt",
+	} {
+		if data, err := embeddedFS.ReadFile(name); err == nil {
+			fmt.Fprintf(w, "  %-48s %10s\n", name, formatEmbeddedSize(len(data)))
+		} else {
+			fmt.Fprintf(w, "  %-48s %10s\n", name, "missing")
+		}
+	}
+}
+
+func formatEmbeddedSize(n int) string {
+	switch {
+	case n >= 1024*1024:
+		return fmt.Sprintf("%.2f MB", float64(n)/(1024*1024))
+	case n >= 1024:
+		return fmt.Sprintf("%.1f KB", float64(n)/1024)
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
+}
+
 // startEmbeddedSubservices extracts and starts the embedded Rust engine and Python ML worker
 // if they are not already listening on their configured ports.
 func startEmbeddedSubservices(cfg Config) func() {
@@ -27,12 +86,8 @@ func startEmbeddedSubservices(cfg Config) func() {
 
 	// 1. Check if Rust engine is already reachable; if not, extract & launch embedded Rust binary
 	if st := checkServiceHealth(cfg.RustEngineURL + "/health"); st["status"] != "ok" {
-		rustBinName := "svgml-rust-engine-linux-amd64"
-		outBinName := "svgml-rust-engine"
-		if runtime.GOOS == "windows" {
-			rustBinName = "svgml-rust-engine-windows-amd64.exe"
-			outBinName = "svgml-rust-engine.exe"
-		}
+		rustBinName := embeddedRustBinaryName(runtime.GOOS)
+		outBinName := embeddedRustOutputName(runtime.GOOS)
 
 		if rawBin, err := embeddedFS.ReadFile("embedded/bin/" + rustBinName); err == nil && len(rawBin) > 1024 {
 			destPath := filepath.Join(runtimeDir, outBinName)
@@ -46,7 +101,7 @@ func startEmbeddedSubservices(cfg Config) func() {
 				log.Printf("[Single-Binary] Embedded Rust binary could not start (%v); using built-in Go vector engine", err)
 			}
 		} else {
-			log.Printf("[Single-Binary] Using built-in native Go SVG & vectorization engine on %s", runtime.GOOS)
+			log.Printf("[Single-Binary] No embedded Rust engine for %s (this build lacks embedded/bin/%s); using the coarse built-in Go vectorizer. Run --self-check to inspect the bundle.", runtime.GOOS, rustBinName)
 		}
 	}
 

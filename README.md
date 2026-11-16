@@ -104,6 +104,39 @@ fallbacks but says so: `/api/health` reports `status: "degraded"`, each unavaila
 sets `source: "native-fallback"`, and `/api/models/download` returns HTTP 503 instead of pretending a
 download succeeded.
 
+## Single-Binary Builds
+
+```bash
+./scripts/package-single-binary.sh        # -> dist/svgml-studio-linux-amd64
+                                          #    dist/svgml-studio-windows-amd64.exe
+```
+
+Each artifact embeds the production React studio, the ML worker source, and **its own platform's** Rust
+vtracer engine; it serves the UI and `/api` on the same port (`5173` by default). The ML worker still
+needs a local Python environment with `uvicorn` and PyTorch — without one the binary starts in the
+degraded mode described above. The embedded Rust engine is started automatically.
+
+The Windows artifact needs a mingw-w64 toolchain to cross-compile that engine
+(`sudo apt-get install -y mingw-w64`, or set `MINGW_PREFIX` to a prefix containing
+`bin/x86_64-w64-mingw32-gcc`). The packager stops rather than silently shipping a Windows `.exe` whose
+vectorizer is the coarse pure-Go fallback; pass `--allow-degraded` if you genuinely want that reduced
+build.
+
+Before reporting success the packager proves the staged engine bytes are present inside each artifact,
+and writes `dist/BUILD-INFO.txt` (per-artifact size, SHA-256, which engine is embedded, whether it was
+verified, and `degraded: true|false`). Any shipped binary can be inspected the same way:
+
+```bash
+./dist/svgml-studio-linux-amd64 --self-check
+# SVGML Studio embedded bundle (linux/amd64)
+#   rust engine for this platform: svgml-rust-engine-linux-amd64
+#   embedded/bin/svgml-rust-engine-linux-amd64          5.50 MB
+#   ...
+```
+
+Pushing a `v*` tag runs `.github/workflows/release.yml`, which installs mingw-w64, packages both
+binaries, and attaches them plus `SHA256SUMS.txt` and `BUILD-INFO.txt` to the GitHub release.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

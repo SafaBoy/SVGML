@@ -309,6 +309,11 @@ var curatedModels = []CuratedModel{
 }
 
 func main() {
+	if hasArg("--self-check") {
+		describeEmbeddedBundle(os.Stdout)
+		return
+	}
+
 	exeBase := strings.ToLower(filepath.Base(os.Args[0]))
 	isSingleBinary := os.Getenv("SINGLE_BINARY") == "1" ||
 		strings.Contains(exeBase, "svgml-studio") ||

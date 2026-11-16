@@ -1,0 +1,62 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend-go/go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend-rust
+
+      - name: Install mingw-w64 (Windows Rust engine cross-compiler)
+        run: sudo apt-get update && sudo apt-get install -y mingw-w64
+
+      - name: Verify the Windows toolchain is usable
+        run: x86_64-w64-mingw32-gcc --version
+
+      - name: Package single binaries
+        run: ./scripts/package-single-binary.sh
+
+      - name: Show build manifest
+        run: cat dist/BUILD-INFO.txt
+
+      - name: Fail if an artifact is degraded
+        run: |
+          if grep -q '^  degraded: true' dist/BUILD-INFO.txt; then
+            echo "Refusing to publish a degraded artifact:" >&2
+            cat dist/BUILD-INFO.txt >&2
+            exit 1
+          fi
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/svgml-studio-linux-amd64
+            dist/svgml-studio-windows-amd64.exe
+            dist/SHA256SUMS.txt
+            dist/BUILD-INFO.txt
