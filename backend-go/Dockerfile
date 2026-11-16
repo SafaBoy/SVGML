@@ -3,6 +3,10 @@ FROM golang:1.23-bookworm AS builder
 WORKDIR /app
 COPY go.mod ./
 COPY *.go ./
+# In the compose stack the studio and ML worker run in their own containers, so
+# the gateway only needs a valid (empty) embed tree to compile.
+RUN mkdir -p embedded/frontend embedded/ml-worker embedded/bin \
+    && touch embedded/frontend/.gitkeep embedded/ml-worker/.gitkeep embedded/bin/.keep
 RUN CGO_ENABLED=0 GOOS=linux go build -o /svgml-go-gateway .
 
 FROM debian:bookworm-slim
