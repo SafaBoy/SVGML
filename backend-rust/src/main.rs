@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, net::SocketAddr, time::Instant};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
-use vtracer::{ColorMode, Config, Hierarchical, convert};
+use vtracer::{convert, ColorMode, Config, Hierarchical};
 
 #[derive(Serialize)]
 struct HealthResponse {
@@ -76,18 +76,7 @@ async fn main() {
         )
         .init();
 
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
-
-    let app = Router::new()
-        .route("/health", get(health_handler))
-        .route("/vectorize", post(vectorize_handler))
-        .route("/process-svg", post(process_svg_handler))
-        .route("/recolor-svg", post(recolor_svg_handler))
-        .layer(DefaultBodyLimit::max(25 * 1024 * 1024))
-        .layer(cors);
+    let app = build_router();
 
     let port: u16 = std::env::var("RUST_PORT")
         .ok()
@@ -95,10 +84,28 @@ async fn main() {
         .unwrap_or(18081);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    info!("Rust SVG & Color Vectorization Engine listening on {}", addr);
+    info!(
+        "Rust SVG & Color Vectorization Engine listening on {}",
+        addr
+    );
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
+}
+
+fn build_router() -> Router {
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
+    Router::new()
+        .route("/health", get(health_handler))
+        .route("/vectorize", post(vectorize_handler))
+        .route("/process-svg", post(process_svg_handler))
+        .route("/recolor-svg", post(recolor_svg_handler))
+        .layer(DefaultBodyLimit::max(25 * 1024 * 1024))
+        .layer(cors)
 }
 
 async fn health_handler() -> impl IntoResponse {
@@ -128,12 +135,19 @@ async fn vectorize_handler(
         .unwrap_or(&req.image_base64)
         .trim();
 
-    let img_bytes = BASE64
-        .decode(clean_b64)
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid base64 image: {e}")))?;
+    let img_bytes = BASE64.decode(clean_b64).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Invalid base64 image: {e}"),
+        )
+    })?;
 
-    let dyn_img = image::load_from_memory(&img_bytes)
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Failed to decode image: {e}")))?;
+    let dyn_img = image::load_from_memory(&img_bytes).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Failed to decode image: {e}"),
+        )
+    })?;
 
     let rgba = dyn_img.to_rgba8();
     let (width, height) = dyn_img.dimensions();
@@ -158,8 +172,12 @@ async fn vectorize_handler(
         path_precision: Some(2),
     };
 
-    let svg_file = convert(color_img, config)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("vtracer error: {e}")))?;
+    let svg_file = convert(color_img, config).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("vtracer error: {e}"),
+        )
+    })?;
 
     let mut svg_str = svg_file.to_string();
     svg_str = normalize_and_colorize_svg(&svg_str, req.palette.as_deref(), true);
@@ -302,7 +320,8 @@ fn normalize_and_colorize_svg(
         let root_tag = mat.as_str();
         let wh_re = Regex::new(r#"\b(?:width|height)\s*=\s*["'][^"']*["']"#).unwrap();
         let cleaned_root = wh_re.replace_all(root_tag, "").to_string();
-        let normalized_root = cleaned_root.replacen("<svg", r#"<svg width="100%" height="100%""#, 1);
+        let normalized_root =
+            cleaned_root.replacen("<svg", r#"<svg width="100%" height="100%""#, 1);
         out = out.replacen(root_tag, &normalized_root, 1);
     }
 
@@ -371,7 +390,10 @@ fn normalize_and_colorize_svg(
 
     // Validate XML structure via roxmltree; if malformed, log a warning
     if let Err(err) = roxmltree::Document::parse(&out) {
-        warn!("SVG XML validation warning (continuing with sanitized output): {}", err);
+        warn!(
+            "SVG XML validation warning (continuing with sanitized output): {}",
+            err
+        );
     }
 
     out
@@ -402,3 +424,6 @@ fn count_svg_elements(svg: &str) -> usize {
     let elem_re = Regex::new(r"<(path|circle|rect|polygon|ellipse|line|polyline|g)\b").unwrap();
     elem_re.find_iter(svg).count()
 }
+
+#[cfg(test)]
+mod tests;

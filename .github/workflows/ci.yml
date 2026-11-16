@@ -37,6 +37,7 @@ jobs:
         with:
           workspaces: backend-rust
       - run: cargo build --release --locked
+      - run: cargo test --locked
 
   studio:
     name: React studio
@@ -65,6 +66,6 @@ jobs:
       # The SVG extraction helpers are pure stdlib; app.py only needs the web stack
       # to import. torch/transformers/diffusers are optional at import time, so the
       # suite runs in seconds without model weights.
-      - run: pip install --disable-pip-version-check fastapi==0.115.5 pydantic==2.10.2 pillow
+      - run: pip install --disable-pip-version-check fastapi==0.162.7 pydantic==2.14.3 pillow
       - run: python -m unittest discover -s tests -t .
         working-directory: ml-worker

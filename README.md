@@ -92,6 +92,9 @@ wheels there) and the script says so.
 # Go gateway middleware tests (auth / CORS / rate limit / body limits)
 cd backend-go && go test ./...
 
+# Rust engine tests (SVG sanitising/colorising, recolor, real vtracer round-trip)
+cd backend-rust && cargo test
+
 # ML worker unit tests (SVG extraction / model classification, stdlib unittest)
 cd ml-worker && .venv/bin/python -m unittest discover -s tests -t .
 
@@ -103,8 +106,8 @@ cd ml-worker && .venv/bin/python -m unittest discover -s tests -t .
 ```
 
 GitHub Actions (`.github/workflows/ci.yml`) runs the same checks on every push and pull request:
-`go build`/`go vet`/`go test`, `cargo build --release --locked`, the frontend production build, and the
-ML worker unit tests.
+`go build`/`go vet`/`go test`, `cargo build --release --locked`/`cargo test`, the frontend production
+build, and the ML worker unit tests.
 
 ### Degraded mode is explicit
 If the Rust engine or Python ML worker is unreachable, the gateway keeps serving from its in-process Go
