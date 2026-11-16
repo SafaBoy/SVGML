@@ -52,9 +52,15 @@ jobs:
             exit 1
           fi
 
+      - name: Use the annotated tag message as the release notes
+        run: |
+          git for-each-ref "refs/tags/${GITHUB_REF_NAME}" --format='%(contents)' > dist/RELEASE-NOTES.md
+          test -s dist/RELEASE-NOTES.md || echo "Release ${GITHUB_REF_NAME}" > dist/RELEASE-NOTES.md
+
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
+          body_path: dist/RELEASE-NOTES.md
           files: |
             dist/svgml-studio-linux-amd64
             dist/svgml-studio-windows-amd64.exe
