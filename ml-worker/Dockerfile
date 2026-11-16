@@ -8,10 +8,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
-# Install CUDA 12.6 PyTorch first: the plain PyPI wheel is built for CUDA 13,
-# which no longer ships kernels for Pascal cards such as the GTX 1050 Ti.
-RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu126 torch \
-    && pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cu126 -r requirements.txt
+# Install PyTorch from the CUDA 12.6 index and drop it from the requirements
+# pass: the plain PyPI wheel is built for CUDA 13, which no longer ships kernels
+# for Pascal cards such as the GTX 1050 Ti. Leaving torch in requirements.txt
+# would let pip "upgrade" it straight back to that CUDA 13 wheel.
+RUN grep -v -E '^torch([^a-zA-Z0-9_.-]|$)' requirements.txt > /tmp/requirements-no-torch.txt \
+    && pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu126 torch==2.14.1+cu126 \
+    && pip install --no-cache-dir -r /tmp/requirements-no-torch.txt
 
 COPY app.py ./
 
