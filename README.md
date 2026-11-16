@@ -81,6 +81,12 @@ See `.env.example` for a copy-pasteable set of defaults.
 ./scripts/run.sh --local
 ```
 
+`build.sh` picks the PyTorch wheel by itself: `nvidia-smi` present means the CUDA 12.6 build (the only
+one that still ships Pascal kernels for cards like the GTX 1050 Ti), otherwise CPU-only. Force it with
+`--cpu` / `--gpu` or `SVGML_TORCH=cpu|cu126|none`. Everything else comes from
+`ml-worker/requirements.txt`; `ai-edge-litert` is skipped automatically on Python 3.13+ (it has no
+wheels there) and the script says so.
+
 ### Verification & Stop
 ```bash
 # ML worker unit tests (SVG extraction / model classification, stdlib unittest)
