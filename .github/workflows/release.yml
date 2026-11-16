@@ -53,8 +53,16 @@ jobs:
           fi
 
       - name: Use the annotated tag message as the release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git for-each-ref "refs/tags/${GITHUB_REF_NAME}" --format='%(contents)' > dist/RELEASE-NOTES.md
+          # actions/checkout fetches a lightweight ref for the tag, so the annotation
+          # has to be read from the API and not from git for-each-ref.
+          kind=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${GITHUB_REF_NAME}" --jq '.object.type')
+          sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${GITHUB_REF_NAME}" --jq '.object.sha')
+          if [ "$kind" = "tag" ]; then
+            gh api "repos/${GITHUB_REPOSITORY}/git/tags/${sha}" --jq '.message' > dist/RELEASE-NOTES.md
+          fi
           test -s dist/RELEASE-NOTES.md || echo "Release ${GITHUB_REF_NAME}" > dist/RELEASE-NOTES.md
 
       - name: Publish release assets
