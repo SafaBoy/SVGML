@@ -52,6 +52,9 @@ services:
       - ML_WORKER_URL=http://ml-worker:18082
       - DATA_DIR=/app/data
       - HF_TOKEN=${HF_TOKEN:-}
+      - SVGML_API_TOKEN=${SVGML_API_TOKEN:-}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-}
+      - RATE_LIMIT_PER_MIN=${RATE_LIMIT_PER_MIN:-60}
     volumes:
       - gallery_data:/app/data
     expose:

@@ -182,6 +182,17 @@ const SAMPLE_PROMPTS = [
 ];
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
+const API_TOKEN = import.meta.env.VITE_API_TOKEN || '';
+
+/** All gateway calls go through here so an optional SVGML_API_TOKEN is always attached. */
+function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  if (!API_TOKEN) {
+    return fetch(`${API_BASE}${path}`, init);
+  }
+  const headers: Record<string, string> = { ...(init.headers as Record<string, string> | undefined) };
+  headers.Authorization = `Bearer ${API_TOKEN}`;
+  return fetch(`${API_BASE}${path}`, { ...init, headers });
+}
 
 /** Generates a colorful synthetic raster photo (PNG data URL) for 1-click photo-to-lineart testing */
 function createSamplePhotoDataUrl(preset: 'portrait' | 'landscape' | 'cybercar'): {
@@ -441,7 +452,7 @@ export default function App() {
 
   const fetchHealth = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/health`);
+      const res = await apiFetch(`/api/health`);
       if (res.ok) {
         setHealth(await res.json());
       }
@@ -452,7 +463,7 @@ export default function App() {
 
   const fetchCuratedModels = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/models/curated`);
+      const res = await apiFetch(`/api/models/curated`);
       if (res.ok) {
         const data = await res.json();
         setModels(data.models || []);
@@ -464,7 +475,7 @@ export default function App() {
 
   const fetchModelStatuses = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/models/status`);
+      const res = await apiFetch(`/api/models/status`);
       if (res.ok) {
         const data = await res.json();
         setModelStatuses(data.models || {});
@@ -477,7 +488,7 @@ export default function App() {
 
   const fetchGallery = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/gallery`);
+      const res = await apiFetch(`/api/gallery`);
       if (res.ok) {
         const data = await res.json();
         const items: GalleryItem[] = data.items || [];
@@ -517,7 +528,7 @@ export default function App() {
     setIsGenerating(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/image-to-svg`, {
+      const res = await apiFetch(`/api/image-to-svg`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -564,7 +575,7 @@ export default function App() {
     }));
 
     try {
-      const res = await fetch(`${API_BASE}/api/models/download`, {
+      const res = await apiFetch(`/api/models/download`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model_id: trimmed }),
@@ -620,7 +631,7 @@ export default function App() {
     setIsSearchingHF(true);
     try {
       const q = encodeURIComponent(searchQuery.trim() || 'svg');
-      const res = await fetch(`${API_BASE}/api/models/search?q=${q}`);
+      const res = await apiFetch(`/api/models/search?q=${q}`);
       if (res.ok) {
         const data = await res.json();
         setModels(data.models || []);
@@ -652,7 +663,7 @@ export default function App() {
     setError(null);
     try {
       const parsedSeed = seedInput.trim() !== '' ? Number(seedInput.trim()) : undefined;
-      const res = await fetch(`${API_BASE}/api/generate`, {
+      const res = await apiFetch(`/api/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -708,7 +719,7 @@ export default function App() {
   const handleRecolorActiveSvg = async (fromHex: string, toHex: string) => {
     if (!activeItem) return;
     try {
-      const res = await fetch(`${API_BASE}/api/svg/recolor`, {
+      const res = await apiFetch(`/api/svg/recolor`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -734,7 +745,7 @@ export default function App() {
   const handleBatchRecolorSvg = async (colorMap: { from: string; to: string }[]) => {
     if (!activeItem || colorMap.length === 0) return;
     try {
-      const res = await fetch(`${API_BASE}/api/svg/recolor`, {
+      const res = await apiFetch(`/api/svg/recolor`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -825,7 +836,7 @@ export default function App() {
     setIsGenerating(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/svg/enhance`, {
+      const res = await apiFetch(`/api/svg/enhance`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -921,7 +932,7 @@ export default function App() {
   const handleSaveEditedSvgToGallery = async () => {
     if (!activeItem) return;
     try {
-      const res = await fetch(`${API_BASE}/api/gallery`, {
+      const res = await apiFetch(`/api/gallery`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -945,7 +956,7 @@ export default function App() {
 
   const handleDeleteGalleryItem = async (id: string) => {
     try {
-      await fetch(`${API_BASE}/api/gallery?id=${encodeURIComponent(id)}`, {
+      await apiFetch(`/api/gallery?id=${encodeURIComponent(id)}`, {
         method: 'DELETE',
       });
       setGallery((prev) => prev.filter((item) => item.id !== id));

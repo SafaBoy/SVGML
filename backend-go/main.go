@@ -18,11 +18,14 @@ import (
 )
 
 type Config struct {
-	Port          string
-	RustEngineURL string
-	MLWorkerURL   string
-	DataDir       string
-	HFToken       string
+	Port            string
+	RustEngineURL   string
+	MLWorkerURL     string
+	DataDir         string
+	HFToken         string
+	APIToken        string
+	AllowedOrigins  []string
+	RateLimitPerMin int
 }
 
 type CuratedModel struct {
@@ -325,11 +328,14 @@ func main() {
 	}
 
 	cfg := Config{
-		Port:          getEnv("GO_PORT", getEnv("PORT", defaultPort)),
-		RustEngineURL: getEnv("RUST_ENGINE_URL", "http://localhost:18081"),
-		MLWorkerURL:   getEnv("ML_WORKER_URL", "http://localhost:18082"),
-		DataDir:       getEnv("DATA_DIR", "./data"),
-		HFToken:       getEnv("HF_TOKEN", ""),
+		Port:            getEnv("GO_PORT", getEnv("PORT", defaultPort)),
+		RustEngineURL:   getEnv("RUST_ENGINE_URL", "http://localhost:18081"),
+		MLWorkerURL:     getEnv("ML_WORKER_URL", "http://localhost:18082"),
+		DataDir:         getEnv("DATA_DIR", "./data"),
+		HFToken:         getEnv("HF_TOKEN", ""),
+		APIToken:        getEnv("SVGML_API_TOKEN", ""),
+		AllowedOrigins:  parseCSV(getEnv("CORS_ALLOWED_ORIGINS", "")),
+		RateLimitPerMin: parseIntEnv("RATE_LIMIT_PER_MIN", 60),
 	}
 
 	var cleanup func()
@@ -436,8 +442,7 @@ func main() {
 			return
 		}
 		var payload map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		if !decodeJSONBody(w, r, &payload, "Invalid JSON: ") {
 			return
 		}
 		var out map[string]any
@@ -480,8 +485,7 @@ func main() {
 		}
 
 		var req GenerateRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "Invalid JSON payload: "+err.Error())
+		if !decodeJSONBody(w, r, &req, "Invalid JSON payload: ") {
 			return
 		}
 		req.Prompt = strings.TrimSpace(req.Prompt)
@@ -580,10 +584,8 @@ func main() {
 			writeError(w, http.StatusMethodNotAllowed, "POST required")
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, 25*1024*1024)
 		var req ImageToSvgRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "Invalid JSON payload: "+err.Error())
+		if !decodeJSONBody(w, r, &req, "Invalid JSON payload: ") {
 			return
 		}
 		if strings.TrimSpace(req.ImageBase64) == "" {
@@ -660,8 +662,7 @@ func main() {
 			return
 		}
 		var req RustRecolorRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		if !decodeJSONBody(w, r, &req, "Invalid JSON: ") {
 			return
 		}
 		var rustResp RustSvgResponse
@@ -678,8 +679,7 @@ func main() {
 			return
 		}
 		var req EnhanceSvgRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		if !decodeJSONBody(w, r, &req, "Invalid JSON: ") {
 			return
 		}
 		if strings.TrimSpace(req.SVG) == "" {
@@ -739,8 +739,7 @@ func main() {
 				BackendUsed string `json:"backend_used"`
 				Device      string `json:"device"`
 			}
-			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-				writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+			if !decodeJSONBody(w, r, &payload, "Invalid JSON: ") {
 				return
 			}
 			proc := nativeProcessSvg(RustProcessSvgRequest{RawSVG: payload.SVG})
@@ -783,7 +782,10 @@ func main() {
 	// Serve embedded React Studio UI on "/"
 	registerEmbeddedFrontend(mux)
 
-	handler := corsMiddleware(loggingMiddleware(mux))
+	handler := loggingMiddleware(securityHeadersMiddleware(corsMiddleware(cfg.AllowedOrigins,
+		bodyLimitMiddleware(authMiddleware(cfg.APIToken,
+			rateLimitMiddleware(newLimiter(cfg.RateLimitPerMin, cfg.RateLimitPerMin/4+5), mux))))))
+	logSecurityConfig(cfg.APIToken, cfg.AllowedOrigins, cfg.RateLimitPerMin)
 
 	// When running as a single binary on :5173, also bind :18080 if free for direct API clients
 	if isSingleBinary && cfg.Port != "18080" {
@@ -989,19 +991,6 @@ func writeJSON(w http.ResponseWriter, status int, data any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
-}
-
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 func loggingMiddleware(next http.Handler) http.Handler {

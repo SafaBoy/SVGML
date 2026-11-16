@@ -89,6 +89,9 @@ wheels there) and the script says so.
 
 ### Verification & Stop
 ```bash
+# Go gateway middleware tests (auth / CORS / rate limit / body limits)
+cd backend-go && go test ./...
+
 # ML worker unit tests (SVG extraction / model classification, stdlib unittest)
 cd ml-worker && .venv/bin/python -m unittest discover -s tests -t .
 
@@ -100,8 +103,8 @@ cd ml-worker && .venv/bin/python -m unittest discover -s tests -t .
 ```
 
 GitHub Actions (`.github/workflows/ci.yml`) runs the same checks on every push and pull request:
-`go build`/`go vet`, `cargo build --release --locked`, the frontend production build, and the ML worker
-unit tests.
+`go build`/`go vet`/`go test`, `cargo build --release --locked`, the frontend production build, and the
+ML worker unit tests.
 
 ### Degraded mode is explicit
 If the Rust engine or Python ML worker is unreachable, the gateway keeps serving from its in-process Go
@@ -109,6 +112,30 @@ fallbacks but says so: `/api/health` reports `status: "degraded"`, each unavaila
 `fallback: true` with the connection error, `/api/models/status` marks cached models `unavailable` and
 sets `source: "native-fallback"`, and `/api/models/download` returns HTTP 503 instead of pretending a
 download succeeded.
+
+### Gateway security defaults
+The gateway is a proxy that can run expensive models, so it is not wide open by default:
+
+- **CORS** — no `Access-Control-Allow-Origin` header is emitted unless the origin is listed in
+  `CORS_ALLOWED_ORIGINS` (comma separated; `*` restores the old allow-any behaviour). Same-origin
+  deployments — the nginx proxy and the single binary — need no configuration. Cross-origin callers now
+  get a browser-side rejection instead of an open API.
+- **Rate limit** — per-IP token bucket on the routes that cost real work (`/api/generate`,
+  `/api/image-to-svg`, `/api/svg/recolor`, `/api/svg/enhance`, `/api/models/download`,
+  `/api/models/search`): `RATE_LIMIT_PER_MIN` requests per minute (default 60, burst is a quarter of that
+  plus five). Exceeding it returns `429` with `Retry-After` and `retry_after_seconds`. Health checks and
+  model-status polling are never limited, so the studio UI keeps working. `RATE_LIMIT_PER_MIN=0` disables it.
+- **Body limits** — 1 MiB by default, 8 MiB for SVG payloads, 25 MiB for photos. Oversized requests get
+  `413` naming the limit instead of a generic `400`.
+- **Optional token** — set `SVGML_API_TOKEN` and `/api/*` (except `/api/health`, so container probes keep
+  working) requires `Authorization: Bearer <token>`; failures return `401` with `WWW-Authenticate`.
+  The bundled studio sends `VITE_API_TOKEN` when it is baked in at build time.
+- **Headers** — `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`,
+  `Referrer-Policy: no-referrer`.
+
+There is no user accounts system: the token is a single shared secret, and the gallery is a single JSON
+file with no per-user separation. Do not expose the stack to the internet without putting it behind an
+authenticating reverse proxy.
 
 ## Single-Binary Builds
 
