@@ -30,333 +30,16 @@ import {
   RotateCw,
 } from 'lucide-react';
 
-interface CuratedModel {
-  id: string;
-  name: string;
-  pipeline: 'direct-svg' | 'diffusion-vtracer' | 'litert-vtracer';
-  framework: string;
-  description: string;
-  tags: string[];
-  downloads: number;
-  likes: number;
-  recommended: boolean;
-  cpu_friendly: boolean;
-}
-
-interface ModelStatus {
-  model_id: string;
-  status: 'ready' | 'downloading' | 'error' | 'not_downloaded';
-  progress: number;
-  downloaded_mb?: number;
-  total_mb?: number;
-  current_file?: string;
-  loaded_in_memory?: boolean;
-  error?: string;
-}
-
-interface GalleryItem {
-  id: string;
-  prompt: string;
-  style: string;
-  model_id: string;
-  pipeline: string;
-  backend_used: string;
-  device: string;
-  svg: string;
-  extracted_colors: string[];
-  path_count: number;
-  byte_size: number;
-  inference_ms: number;
-  rust_process_ms: number;
-  total_ms: number;
-  created_at: string;
-}
-
-const STYLE_PRESETS = [
-  {
-    id: 'vibrant-gradient',
-    label: 'Vibrant Gradient',
-    colors: ['#6366F1', '#EC4899', '#06B6D4', '#F59E0B', '#10B981'],
-  },
-  {
-    id: 'flat-icon',
-    label: 'Flat Vector Icon',
-    colors: ['#3B82F6', '#EF4444', '#FBBF24', '#10B981', '#1E293B'],
-  },
-  {
-    id: 'cyberpunk',
-    label: 'Cyberpunk Neon',
-    colors: ['#FF007F', '#00F0FF', '#7928CA', '#FFE600', '#0D0221'],
-  },
-  {
-    id: 'geometric-pop',
-    label: 'Geometric Pop',
-    colors: ['#FF595E', '#FFCA3A', '#8AC926', '#1982C4', '#6A4C93'],
-  },
-  {
-    id: 'isometric',
-    label: 'Isometric 3D',
-    colors: ['#4F46E5', '#818CF8', '#C7D2FE', '#14B8A6', '#F43F5E'],
-  },
-];
-
-const LINEART_MODES = [
-  {
-    id: 'colored-line-art',
-    title: 'Colored Line-Art + Fill',
-    sub: 'Crisp ink outlines + vibrant posterized color regions',
-  },
-  {
-    id: 'neon-line-art',
-    title: 'Neon Colored Outlines',
-    sub: 'Glowing colored line-art strokes on dark canvas',
-  },
-  {
-    id: 'ink-wash-vector',
-    title: 'Comic / Ink Wash Vector',
-    sub: 'Soft cel-shaded color blocks + detailed ink lines',
-  },
-  {
-    id: 'full-color-photo',
-    title: 'Full-Color Photo Splines',
-    sub: 'High-detail multi-layered color vectorization',
-  },
-];
-
-const ENHANCE_MODES = [
-  {
-    id: 'ai-gradient-glow',
-    title: 'AI Gradient & Neon Glow',
-    sub: 'Injects multi-stop gradients, radial halo & bloom filter',
-  },
-  {
-    id: 'ai-detail-enrich',
-    title: 'ML Sparkle & Sacred Accents',
-    sub: 'PyTorch GPU harmonic star & orbital vector overlays',
-  },
-  {
-    id: 'ai-cyber-frame',
-    title: 'AI Cyber Badge Frame',
-    sub: 'Wraps vector in a neon hexagonal & rounded cyber frame',
-  },
-  {
-    id: 'ai-prompt-remix',
-    title: 'AI Prompt SVG Remix',
-    sub: 'Blends new ML-generated vector layers from your prompt',
-  },
-];
-
-const SYSTEM_PROMPT_PRESETS = [
-  {
-    id: 'strict-svg',
-    label: 'Strict Colored SVG XML',
-    prompt:
-      'You are an expert SVG designer. Respond ONLY with valid, standalone <svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">...</svg> XML code using vibrant hex colors. Do not include markdown explanation.',
-  },
-  {
-    id: 'flat-minimal',
-    label: 'Flat Minimal Icon',
-    prompt:
-      'You are a minimalist flat icon designer. Output clean geometric <svg viewBox="0 0 512 512"> paths with bold solid hex fills, rounded corners, and zero clutter.',
-  },
-  {
-    id: 'neon-gradient',
-    label: 'Neon Gradient & Glow',
-    prompt:
-      'You are a futuristic vector artist. Use <linearGradient>, <radialGradient>, and high-contrast neon hex colors inside valid standalone <svg viewBox="0 0 512 512"> XML.',
-  },
-  {
-    id: 'isometric-3d',
-    label: 'Isometric 3D Vector',
-    prompt:
-      'You are an isometric 3D vector architect. Construct layered geometric facets with distinct light, mid, and shadow hex tones in valid <svg viewBox="0 0 512 512"> XML.',
-  },
-];
-
-const SAMPLE_PROMPTS = [
-  'A vibrant sunset over twin geometric mountains and ocean waves',
-  'A futuristic AI robot head with glowing neon cyan and magenta visor',
-  'A sleek space rocket launching past golden stars and a ringed planet',
-  'A cute geometric fox mascot icon with warm orange and violet gradients',
-  'A blooming lotus flower emblem with emerald and rose petals',
-];
-
-const API_BASE = import.meta.env.VITE_API_BASE || '';
-const API_TOKEN = import.meta.env.VITE_API_TOKEN || '';
-const GALLERY_PAGE_SIZE = 24;
-
-/** All gateway calls go through here so an optional SVGML_API_TOKEN is always attached. */
-function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  if (!API_TOKEN) {
-    return fetch(`${API_BASE}${path}`, init);
-  }
-  const headers: Record<string, string> = { ...(init.headers as Record<string, string> | undefined) };
-  headers.Authorization = `Bearer ${API_TOKEN}`;
-  return fetch(`${API_BASE}${path}`, { ...init, headers });
-}
-
-/** Generates a colorful synthetic raster photo (PNG data URL) for 1-click photo-to-lineart testing */
-function createSamplePhotoDataUrl(preset: 'portrait' | 'landscape' | 'cybercar'): {
-  dataUrl: string;
-  filename: string;
-} {
-  const canvas = document.createElement('canvas');
-  canvas.width = 384;
-  canvas.height = 384;
-  const ctx = canvas.getContext('2d')!;
-
-  if (preset === 'portrait') {
-    const bg = ctx.createLinearGradient(0, 0, 384, 384);
-    bg.addColorStop(0, '#FF9A8B');
-    bg.addColorStop(0.5, '#FF6A88');
-    bg.addColorStop(1, '#4FACFE');
-    ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, 384, 384);
-
-    // Hair / silhouette
-    ctx.fillStyle = '#2B1B54';
-    ctx.beginPath();
-    ctx.arc(192, 175, 115, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Shoulders / jacket
-    ctx.fillStyle = '#00C9A7';
-    ctx.beginPath();
-    ctx.ellipse(192, 360, 135, 95, 0, Math.PI, 0, false);
-    ctx.fill();
-
-    // Collar stripes
-    ctx.strokeStyle = '#FFBE0B';
-    ctx.lineWidth = 10;
-    ctx.beginPath();
-    ctx.moveTo(145, 275);
-    ctx.lineTo(192, 345);
-    ctx.lineTo(239, 275);
-    ctx.stroke();
-
-    // Face
-    ctx.fillStyle = '#FFD1B3';
-    ctx.beginPath();
-    ctx.ellipse(192, 185, 72, 86, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Sunglasses
-    ctx.fillStyle = '#FF007F';
-    ctx.fillRect(128, 152, 56, 34);
-    ctx.fillRect(200, 152, 56, 34);
-    ctx.strokeStyle = '#1E1B4B';
-    ctx.lineWidth = 6;
-    ctx.strokeRect(128, 152, 56, 34);
-    ctx.strokeRect(200, 152, 56, 34);
-    ctx.beginPath();
-    ctx.moveTo(184, 168);
-    ctx.lineTo(200, 168);
-    ctx.stroke();
-
-    // Smile
-    ctx.strokeStyle = '#D90429';
-    ctx.lineWidth = 6;
-    ctx.beginPath();
-    ctx.arc(192, 212, 24, 0.15 * Math.PI, 0.85 * Math.PI);
-    ctx.stroke();
-
-    return { dataUrl: canvas.toDataURL('image/png'), filename: 'sample-pop-portrait.png' };
-  }
-
-  if (preset === 'cybercar') {
-    const bg = ctx.createLinearGradient(0, 0, 0, 384);
-    bg.addColorStop(0, '#1A0B2E');
-    bg.addColorStop(0.6, '#7928CA');
-    bg.addColorStop(1, '#0F172A');
-    ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, 384, 384);
-
-    // Neon sun
-    ctx.fillStyle = '#FFE600';
-    ctx.beginPath();
-    ctx.arc(192, 145, 76, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Sports car body
-    ctx.fillStyle = '#00F0FF';
-    ctx.beginPath();
-    ctx.moveTo(48, 265);
-    ctx.lineTo(105, 200);
-    ctx.lineTo(265, 200);
-    ctx.lineTo(336, 255);
-    ctx.lineTo(342, 295);
-    ctx.lineTo(42, 295);
-    ctx.closePath();
-    ctx.fill();
-
-    // Windshield
-    ctx.fillStyle = '#FF007F';
-    ctx.beginPath();
-    ctx.moveTo(118, 208);
-    ctx.lineTo(248, 208);
-    ctx.lineTo(285, 248);
-    ctx.lineTo(95, 248);
-    ctx.closePath();
-    ctx.fill();
-
-    // Wheels
-    ctx.fillStyle = '#1E293B';
-    ctx.beginPath();
-    ctx.arc(112, 295, 34, 0, Math.PI * 2);
-    ctx.arc(276, 295, 34, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = '#FFE600';
-    ctx.beginPath();
-    ctx.arc(112, 295, 16, 0, Math.PI * 2);
-    ctx.arc(276, 295, 16, 0, Math.PI * 2);
-    ctx.fill();
-
-    return { dataUrl: canvas.toDataURL('image/png'), filename: 'sample-cyber-car.png' };
-  }
-
-  // Default: 'landscape'
-  const sky = ctx.createLinearGradient(0, 0, 0, 260);
-  sky.addColorStop(0, '#3A0CA3');
-  sky.addColorStop(0.5, '#F72585');
-  sky.addColorStop(1, '#FFBE0B');
-  ctx.fillStyle = sky;
-  ctx.fillRect(0, 0, 384, 384);
-
-  // Sun
-  ctx.fillStyle = '#FFF3B0';
-  ctx.beginPath();
-  ctx.arc(250, 120, 58, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Mountains
-  ctx.fillStyle = '#4361EE';
-  ctx.beginPath();
-  ctx.moveTo(0, 285);
-  ctx.lineTo(115, 130);
-  ctx.lineTo(235, 285);
-  ctx.closePath();
-  ctx.fill();
-
-  ctx.fillStyle = '#4CC9F0';
-  ctx.beginPath();
-  ctx.moveTo(140, 285);
-  ctx.lineTo(265, 145);
-  ctx.lineTo(384, 285);
-  ctx.closePath();
-  ctx.fill();
-
-  // Foreground lake & trees
-  ctx.fillStyle = '#06D6A0';
-  ctx.fillRect(0, 275, 384, 109);
-
-  ctx.fillStyle = '#118AB2';
-  ctx.beginPath();
-  ctx.ellipse(192, 335, 160, 32, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  return { dataUrl: canvas.toDataURL('image/png'), filename: 'sample-mountain-photo.png' };
-}
+import {
+  STYLE_PRESETS,
+  LINEART_MODES,
+  ENHANCE_MODES,
+  SYSTEM_PROMPT_PRESETS,
+  SAMPLE_PROMPTS,
+} from './presets';
+import { API_BASE, API_TOKEN, GALLERY_PAGE_SIZE, apiFetch } from './api';
+import { createSamplePhotoDataUrl } from './samplePhoto';
+import type { CuratedModel, ModelStatus, GalleryItem } from './types';
 
 export default function App() {
   const [studioMode, setStudioMode] = useState<'text' | 'photo' | 'editor'>('text');
@@ -391,6 +74,15 @@ export default function App() {
   const [svgHistory, setSvgHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
   const [savedNotice, setSavedNotice] = useState<boolean>(false);
+  const [toast, setToast] = useState<string | null>(null);
+
+  const notify = (message: string) => setToast(message);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), 5000);
+    return () => clearTimeout(timer);
+  }, [toast]);
   const svgFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // HF Model Inference Hyperparameters & System Prompt state
@@ -461,7 +153,7 @@ export default function App() {
         setHealth(await res.json());
       }
     } catch {
-      // ignore initial health check error
+      // Background poll: the header pills show "Offline"/"Degraded" instead.
     }
   };
 
@@ -473,7 +165,7 @@ export default function App() {
         setModels(data.models || []);
       }
     } catch {
-      // ignore
+      // Optional list; the studio still works from the curated defaults.
     }
   };
 
@@ -486,13 +178,14 @@ export default function App() {
         setModelStatusSource(data.source || 'ml-worker');
       }
     } catch {
-      // ignore
+      // Background poll: surfaced through the model-hub offline banner.
     }
   };
 
   const fetchGallery = async (offset = 0) => {
     try {
       const res = await apiFetch(`/api/gallery?limit=${GALLERY_PAGE_SIZE}&offset=${offset}`);
+      if (!res.ok) throw new Error(`gallery request failed (${res.status})`);
       if (res.ok) {
         const data = await res.json();
         const items: GalleryItem[] = data.items || [];
@@ -505,8 +198,10 @@ export default function App() {
           setActiveItem(items[0]);
         }
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      // The initial load may legitimately run before the gateway is up; only
+      // complain when the user explicitly asked for another page.
+      if (offset > 0) notify((err as Error).message || 'Could not load older SVGs.');
     }
   };
 
@@ -725,10 +420,11 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (activeItem?.svg && svgHistory.length === 0) {
-      setSvgHistory([activeItem.svg]);
-      setHistoryIndex(0);
-    }
+    // Reset history whenever the selected artwork changes, otherwise undo/redo
+    // would replay the previous item's edits onto the new one.
+    if (!activeItem?.id) return;
+    setSvgHistory(activeItem.svg ? [activeItem.svg] : []);
+    setHistoryIndex(0);
   }, [activeItem?.id]);
 
   const handleRecolorActiveSvg = async (fromHex: string, toHex: string) => {
@@ -742,18 +438,17 @@ export default function App() {
           color_map: [{ from: fromHex, to: toHex }],
         }),
       });
-      if (res.ok) {
-        const updated = await res.json();
-        pushSvgHistory(updated.svg);
-        setActiveItem({
-          ...activeItem,
-          svg: updated.svg,
-          extracted_colors: updated.extracted_colors,
-          rust_process_ms: updated.processing_ms,
-        });
-      }
-    } catch {
-      // ignore
+      if (!res.ok) throw new Error(`recolor failed (${res.status})`);
+      const updated = await res.json();
+      pushSvgHistory(updated.svg);
+      setActiveItem({
+        ...activeItem,
+        svg: updated.svg,
+        extracted_colors: updated.extracted_colors,
+        rust_process_ms: updated.processing_ms,
+      });
+    } catch (err) {
+      notify((err as Error).message || 'Recoloring the SVG failed.');
     }
   };
 
@@ -768,18 +463,17 @@ export default function App() {
           color_map: colorMap,
         }),
       });
-      if (res.ok) {
-        const updated = await res.json();
-        pushSvgHistory(updated.svg);
-        setActiveItem({
-          ...activeItem,
-          svg: updated.svg,
-          extracted_colors: updated.extracted_colors,
-          rust_process_ms: updated.processing_ms,
-        });
-      }
-    } catch {
-      // ignore
+      if (!res.ok) throw new Error(`recolor failed (${res.status})`);
+      const updated = await res.json();
+      pushSvgHistory(updated.svg);
+      setActiveItem({
+        ...activeItem,
+        svg: updated.svg,
+        extracted_colors: updated.extracted_colors,
+        rust_process_ms: updated.processing_ms,
+      });
+    } catch (err) {
+      notify((err as Error).message || 'Recoloring the SVG failed.');
     }
   };
 
@@ -958,30 +652,30 @@ export default function App() {
           device: activeItem.device,
         }),
       });
-      if (res.ok) {
-        const saved = await res.json();
-        setGallery((prev) => [saved, ...prev]);
-        setGalleryTotal((prev) => prev + 1);
-        setSavedNotice(true);
-        setTimeout(() => setSavedNotice(false), 2000);
-      }
-    } catch {
-      // ignore
+      if (!res.ok) throw new Error(`save failed (${res.status})`);
+      const saved = await res.json();
+      setGallery((prev) => [saved, ...prev]);
+      setGalleryTotal((prev) => prev + 1);
+      setSavedNotice(true);
+      setTimeout(() => setSavedNotice(false), 2000);
+    } catch (err) {
+      notify((err as Error).message || 'Saving to the gallery failed.');
     }
   };
 
   const handleDeleteGalleryItem = async (id: string) => {
     try {
-      await apiFetch(`/api/gallery?id=${encodeURIComponent(id)}`, {
+      const res = await apiFetch(`/api/gallery?id=${encodeURIComponent(id)}`, {
         method: 'DELETE',
       });
+      if (!res.ok) throw new Error(`delete failed (${res.status})`);
       setGallery((prev) => prev.filter((item) => item.id !== id));
       setGalleryTotal((prev) => Math.max(0, prev - 1));
       if (activeItem?.id === id) {
         setActiveItem(null);
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      notify((err as Error).message || 'Deleting that SVG failed.');
     }
   };
 
@@ -1056,6 +750,23 @@ export default function App() {
 
   return (
     <div className="min-h-screen w-full overflow-x-hidden flex flex-col bg-slate-950 text-slate-100">
+      {toast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 max-w-[min(92vw,28rem)] px-4 py-2.5 rounded-xl border border-rose-700 bg-rose-950/95 text-rose-100 text-xs shadow-lg shadow-black/40 flex items-start gap-2"
+        >
+          <span className="flex-1 break-words">{toast}</span>
+          <button
+            type="button"
+            onClick={() => setToast(null)}
+            className="text-rose-300 hover:text-white shrink-0"
+            aria-label="Dismiss notification"
+          >
+            ×
+          </button>
+        </div>
+      )}
       {/* Top Header — Mobile & Desktop Responsive */}
       <header className="border-b border-slate-800/80 bg-slate-900/80 backdrop-blur-md sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-3 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-2.5">

@@ -150,6 +150,16 @@ the studio shows a "Load older SVGs" button while more remain. `limit` defaults 
 truncate it. If the file is unparseable at startup it is moved aside to `gallery.json.corrupt-<unix>`
 instead of being overwritten.
 
+### Studio source layout
+
+`frontend/src/App.tsx` holds the studio component; shared pieces live beside it so they can be read and
+changed on their own: `types.ts` (API payload types), `presets.ts` (style, line-art, enhance and system
+prompt presets plus sample prompts), `api.ts` (`API_BASE`, `VITE_API_TOKEN`, the page size and the
+`apiFetch` helper that attaches the bearer token) and `samplePhoto.ts` (the demo photos). Failures in
+user-initiated actions (recolour, save, delete, loading another gallery page) raise a dismissible toast;
+background health/model polls stay silent because the header pills and the model-hub banner already
+report that state.
+
 ## Single-Binary Builds
 
 ```bash
