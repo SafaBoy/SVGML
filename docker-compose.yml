@@ -29,7 +29,10 @@ services:
       - HF_TOKEN=${HF_TOKEN:-}
       - HF_EAGER_DOWNLOAD=${HF_EAGER_DOWNLOAD:-false}
     volumes:
-      - hf_cache:/app/hf_cache
+      # HF_CACHE_DIR pointing at a host directory (for example
+      # ~/.cache/huggingface) becomes a bind mount so downloaded checkpoints are
+      # reused; otherwise the module-scoped named volume is used.
+      - ${HF_CACHE_DIR:-hf_cache}:/app/hf_cache
     expose:
       - "18082"
     networks:

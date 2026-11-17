@@ -52,16 +52,26 @@ run_local() {
   fi
 }
 
+reuse_host_hf_cache() {
+  if [ -z "${HF_CACHE_DIR:-}" ] && [ -d "$HOME/.cache/huggingface" ]; then
+    export HF_CACHE_DIR="$HOME/.cache/huggingface"
+    echo "ℹ️  Reusing the host Hugging Face cache: $HF_CACHE_DIR"
+    echo "   (set HF_CACHE_DIR to override, or HF_CACHE_DIR=hf_cache for a named volume)"
+  fi
+}
+
 case "$MODE" in
   --local)
     run_local
     ;;
   --gpu)
+    reuse_host_hf_cache
     echo "Starting Docker Compose stack with NVIDIA GPU acceleration..."
     docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
     echo "✅ Stack running at http://localhost:5173"
     ;;
   --docker|*)
+    reuse_host_hf_cache
     echo "Starting Docker Compose stack (CPU-compatible mode)..."
     docker compose up -d --build
     echo "✅ Stack running at http://localhost:5173"

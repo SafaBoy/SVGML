@@ -77,6 +77,11 @@ See `.env.example` for a copy-pasteable set of defaults.
 ```bash
 ./scripts/run.sh --gpu
 ```
+Both Docker modes reuse your host Hugging Face cache when `~/.cache/huggingface` exists: `run.sh`
+exports `HF_CACHE_DIR` and compose bind-mounts it into the ML worker, so checkpoints you already
+downloaded are available immediately. Set `HF_CACHE_DIR=/some/other/cache` to point elsewhere, or
+`HF_CACHE_DIR=hf_cache` to fall back to the project's named volume.
+
 ### Option 3: Local Native Execution (Go + Rust + Python Venv + Vite)
 ```bash
 ./scripts/build.sh --local
