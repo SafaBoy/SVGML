@@ -140,6 +140,16 @@ There is no user accounts system: the token is a single shared secret, and the g
 file with no per-user separation. Do not expose the stack to the internet without putting it behind an
 authenticating reverse proxy.
 
+### Gallery storage
+
+`GET /api/gallery?limit=24&offset=0` returns one page plus `total`, `offset`, `limit` and `has_more`, and
+the studio shows a "Load older SVGs" button while more remain. `limit` defaults to 24 and is clamped to
+100; the store keeps the newest 100 items and drops the rest.
+
+`data/gallery.json` is rewritten through a temp file plus `fsync` and `rename`, so a crash mid-write cannot
+truncate it. If the file is unparseable at startup it is moved aside to `gallery.json.corrupt-<unix>`
+instead of being overwritten.
+
 ## Single-Binary Builds
 
 ```bash

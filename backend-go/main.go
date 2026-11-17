@@ -12,7 +12,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 )
@@ -136,80 +135,6 @@ type RustSvgResponse struct {
 	PathCount       int      `json:"path_count"`
 	ByteSize        int      `json:"byte_size"`
 	ProcessingMs    int64    `json:"processing_ms"`
-}
-
-type GalleryItem struct {
-	ID              string   `json:"id"`
-	Prompt          string   `json:"prompt"`
-	Style           string   `json:"style"`
-	ModelID         string   `json:"model_id"`
-	Pipeline        string   `json:"pipeline"`
-	BackendUsed     string   `json:"backend_used"`
-	Device          string   `json:"device"`
-	SVG             string   `json:"svg"`
-	ExtractedColors []string `json:"extracted_colors"`
-	PathCount       int      `json:"path_count"`
-	ByteSize        int      `json:"byte_size"`
-	InferenceMs     int64    `json:"inference_ms"`
-	RustProcessMs   int64    `json:"rust_process_ms"`
-	TotalMs         int64    `json:"total_ms"`
-	CreatedAt       string   `json:"created_at"`
-}
-
-type GalleryStore struct {
-	mu       sync.RWMutex
-	filePath string
-	items    []GalleryItem
-}
-
-func NewGalleryStore(dataDir string) *GalleryStore {
-	_ = os.MkdirAll(dataDir, 0755)
-	fp := filepath.Join(dataDir, "gallery.json")
-	store := &GalleryStore{
-		filePath: fp,
-		items:    []GalleryItem{},
-	}
-	if raw, err := os.ReadFile(fp); err == nil {
-		_ = json.Unmarshal(raw, &store.items)
-	}
-	return store
-}
-
-func (s *GalleryStore) Add(item GalleryItem) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.items = append([]GalleryItem{item}, s.items...)
-	if len(s.items) > 100 {
-		s.items = s.items[:100]
-	}
-	s.saveLocked()
-}
-
-func (s *GalleryStore) List() []GalleryItem {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]GalleryItem, len(s.items))
-	copy(out, s.items)
-	return out
-}
-
-func (s *GalleryStore) Delete(id string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i, it := range s.items {
-		if it.ID == id {
-			s.items = append(s.items[:i], s.items[i+1:]...)
-			s.saveLocked()
-			return true
-		}
-	}
-	return false
-}
-
-func (s *GalleryStore) saveLocked() {
-	if data, err := json.MarshalIndent(s.items, "", "  "); err == nil {
-		_ = os.WriteFile(s.filePath, data, 0644)
-	}
 }
 
 var curatedModels = []CuratedModel{
@@ -724,60 +649,7 @@ func main() {
 		})
 	})
 
-	// Gallery list, save edited SVG, & delete
-	mux.HandleFunc("/api/gallery", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			writeJSON(w, http.StatusOK, map[string]any{
-				"items": store.List(),
-			})
-		case http.MethodPost:
-			var payload struct {
-				Prompt      string `json:"prompt"`
-				Style       string `json:"style"`
-				SVG         string `json:"svg"`
-				BackendUsed string `json:"backend_used"`
-				Device      string `json:"device"`
-			}
-			if !decodeJSONBody(w, r, &payload, "Invalid JSON: ") {
-				return
-			}
-			proc := nativeProcessSvg(RustProcessSvgRequest{RawSVG: payload.SVG})
-			promptLabel := strings.TrimSpace(payload.Prompt)
-			if promptLabel == "" {
-				promptLabel = "Edited / AI-Enhanced SVG"
-			}
-			item := GalleryItem{
-				ID:              fmt.Sprintf("svg-%d", time.Now().UnixNano()),
-				Prompt:          promptLabel,
-				Style:           payload.Style,
-				ModelID:         "svg-editor-enhancer",
-				Pipeline:        "svg-editor",
-				BackendUsed:     payload.BackendUsed,
-				Device:          payload.Device,
-				SVG:             proc.SVG,
-				ExtractedColors: proc.ExtractedColors,
-				PathCount:       proc.PathCount,
-				ByteSize:        proc.ByteSize,
-				InferenceMs:     1,
-				RustProcessMs:   proc.ProcessingMs,
-				TotalMs:         proc.ProcessingMs + 1,
-				CreatedAt:       time.Now().UTC().Format(time.RFC3339),
-			}
-			store.Add(item)
-			writeJSON(w, http.StatusOK, item)
-		case http.MethodDelete:
-			id := r.URL.Query().Get("id")
-			if id == "" {
-				writeError(w, http.StatusBadRequest, "Missing id query parameter")
-				return
-			}
-			deleted := store.Delete(id)
-			writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted, "id": id})
-		default:
-			writeError(w, http.StatusMethodNotAllowed, "GET, POST, or DELETE required")
-		}
-	})
+	mux.HandleFunc("/api/gallery", newGalleryHandler(store))
 
 	// Serve embedded React Studio UI on "/"
 	registerEmbeddedFrontend(mux)

@@ -183,6 +183,7 @@ const SAMPLE_PROMPTS = [
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 const API_TOKEN = import.meta.env.VITE_API_TOKEN || '';
+const GALLERY_PAGE_SIZE = 24;
 
 /** All gateway calls go through here so an optional SVGML_API_TOKEN is always attached. */
 function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
@@ -417,6 +418,9 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [activeItem, setActiveItem] = useState<GalleryItem | null>(null);
   const [gallery, setGallery] = useState<GalleryItem[]>([]);
+  const [galleryTotal, setGalleryTotal] = useState(0);
+  const [galleryHasMore, setGalleryHasMore] = useState(false);
+  const [galleryLoading, setGalleryLoading] = useState(false);
 
   const [viewMode, setViewMode] = useState<'preview' | 'split' | 'code'>('preview');
   const [mobileSection, setMobileSection] = useState<
@@ -486,20 +490,31 @@ export default function App() {
     }
   };
 
-  const fetchGallery = async () => {
+  const fetchGallery = async (offset = 0) => {
     try {
-      const res = await apiFetch(`/api/gallery`);
+      const res = await apiFetch(`/api/gallery?limit=${GALLERY_PAGE_SIZE}&offset=${offset}`);
       if (res.ok) {
         const data = await res.json();
         const items: GalleryItem[] = data.items || [];
-        setGallery(items);
-        if (items.length > 0 && !activeItem) {
+        setGallery((prev) =>
+          offset === 0 ? items : [...prev, ...items.filter((newItem) => !prev.some((old) => old.id === newItem.id))]
+        );
+        setGalleryTotal(typeof data.total === 'number' ? data.total : offset + items.length);
+        setGalleryHasMore(Boolean(data.has_more));
+        if (offset === 0 && items.length > 0 && !activeItem) {
           setActiveItem(items[0]);
         }
       }
     } catch {
       // ignore
     }
+  };
+
+  const loadMoreGallery = async () => {
+    if (galleryLoading || !galleryHasMore) return;
+    setGalleryLoading(true);
+    await fetchGallery(gallery.length);
+    setGalleryLoading(false);
   };
 
   const handleFileUpload = (file: File) => {
@@ -946,6 +961,7 @@ export default function App() {
       if (res.ok) {
         const saved = await res.json();
         setGallery((prev) => [saved, ...prev]);
+        setGalleryTotal((prev) => prev + 1);
         setSavedNotice(true);
         setTimeout(() => setSavedNotice(false), 2000);
       }
@@ -960,6 +976,7 @@ export default function App() {
         method: 'DELETE',
       });
       setGallery((prev) => prev.filter((item) => item.id !== id));
+      setGalleryTotal((prev) => Math.max(0, prev - 1));
       if (activeItem?.id === id) {
         setActiveItem(null);
       }
@@ -2325,7 +2342,8 @@ export default function App() {
           >
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-semibold text-slate-200">
-                Recent Colored SVGs ({gallery.length})
+                Recent Colored SVGs ({gallery.length}
+                {galleryTotal > gallery.length ? ` of ${galleryTotal}` : ''})
               </h3>
               <span className="text-xs text-slate-500">Tap to inspect or download</span>
             </div>
@@ -2410,6 +2428,17 @@ export default function App() {
                   </div>
                 ))}
               </div>
+            )}
+
+            {galleryHasMore && (
+              <button
+                type="button"
+                onClick={loadMoreGallery}
+                disabled={galleryLoading}
+                className="w-full min-h-[38px] rounded-xl border border-slate-700 bg-slate-950/60 hover:border-slate-600 disabled:opacity-60 text-xs font-medium text-slate-300 transition"
+              >
+                {galleryLoading ? 'Loading…' : `Load older SVGs (${galleryTotal - gallery.length} more)`}
+              </button>
             )}
           </div>
         </section>
