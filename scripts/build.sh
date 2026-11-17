@@ -76,7 +76,7 @@ build_local() {
   local index_url
   index_url="$(torch_index_url "$variant")"
 
-  echo "[3/4] Setting up Python PyTorch/LiteRT ML Worker (torch: $variant)..."
+  echo "[3/4] Setting up Python PyTorch ML Worker (torch: $variant)..."
   if [ ! -d "$ROOT_DIR/ml-worker/.venv" ]; then
     python3 -m venv "$ROOT_DIR/ml-worker/.venv"
   fi
@@ -97,11 +97,6 @@ build_local() {
 
   if [ "${SVGML_SKIP_PLAYWRIGHT:-0}" != "1" ]; then
     "$venv_pip" install playwright
-  fi
-
-  if ! "$ROOT_DIR/ml-worker/.venv/bin/python" -c 'import sys; raise SystemExit(0 if sys.version_info < (3, 13) else 1)'; then
-    echo "ℹ️  $( "$ROOT_DIR/ml-worker/.venv/bin/python" -V ) — ai-edge-litert requires Python < 3.13,"
-    echo "    so the LiteRT backend is unavailable in this environment (PyTorch paths still work)."
   fi
 
   echo "[4/4] Building React + TypeScript Frontend..."

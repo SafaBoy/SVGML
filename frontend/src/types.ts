@@ -1,7 +1,7 @@
 export interface CuratedModel {
   id: string;
   name: string;
-  pipeline: 'direct-svg' | 'diffusion-vtracer' | 'litert-vtracer';
+  pipeline: 'direct-svg' | 'diffusion-vtracer' | 'neural-vtracer';
   framework: string;
   description: string;
   tags: string[];

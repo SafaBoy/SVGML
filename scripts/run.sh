@@ -22,7 +22,7 @@ run_local() {
   RUST_PORT=18081 "$ROOT_DIR/bin/svgml-rust-engine" > "$ROOT_DIR/.run/rust.log" 2>&1 &
   echo $! > "$ROOT_DIR/.run/rust.pid"
 
-  echo "Starting Python PyTorch/LiteRT ML Worker on :18082..."
+  echo "Starting Python PyTorch ML Worker on :18082..."
   ML_PORT=18082 "$ROOT_DIR/ml-worker/.venv/bin/python" "$ROOT_DIR/ml-worker/app.py" > "$ROOT_DIR/.run/ml.log" 2>&1 &
   echo $! > "$ROOT_DIR/.run/ml.pid"
 

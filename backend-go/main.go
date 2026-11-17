@@ -30,7 +30,7 @@ type Config struct {
 type CuratedModel struct {
 	ID          string   `json:"id"`
 	Name        string   `json:"name"`
-	Pipeline    string   `json:"pipeline"` // "direct-svg", "diffusion-vtracer", "litert-vtracer"
+	Pipeline    string   `json:"pipeline"` // "direct-svg", "diffusion-vtracer", "neural-vtracer"
 	Framework   string   `json:"framework"`
 	Description string   `json:"description"`
 	Tags        []string `json:"tags"`
@@ -45,7 +45,7 @@ type GenerateRequest struct {
 	SystemPrompt   string   `json:"system_prompt,omitempty"`
 	NegativePrompt string   `json:"negative_prompt,omitempty"`
 	ModelID        string   `json:"model_id"`
-	Pipeline       string   `json:"pipeline"` // "direct-svg" | "diffusion-vtracer" | "litert-vtracer"
+	Pipeline       string   `json:"pipeline"` // "direct-svg" | "diffusion-vtracer" | "neural-vtracer"
 	Style          string   `json:"style"`
 	Palette        []string `json:"palette,omitempty"`
 	ColorPrecision int      `json:"color_precision,omitempty"`
@@ -171,18 +171,6 @@ var curatedModels = []CuratedModel{
 		Tags:        []string{"text-to-image", "diffusers", "vtracer", "color-svg", "pytorch"},
 		Downloads:   154300,
 		Likes:       615,
-		Recommended: true,
-		CPUFriendly: true,
-	},
-	{
-		ID:          "litert/neural-svg-synthesizer-v1",
-		Name:        "LiteRT / PyTorch Neural Color Vector Synthesizer",
-		Pipeline:    "litert-vtracer",
-		Framework:   "PyTorch + LiteRT + Rust vtracer (Built-in)",
-		Description: "Ultra-fast neural Fourier/CPPN color field synthesizer compiled for LiteRT & PyTorch, vectorized via Rust vtracer in <100ms on CPU.",
-		Tags:        []string{"litert", "pytorch", "fast-cpu", "color-vector", "vtracer"},
-		Downloads:   42100,
-		Likes:       310,
 		Recommended: true,
 		CPUFriendly: true,
 	},
@@ -402,7 +390,7 @@ func main() {
 		})
 	})
 
-	// End-to-end SVG Generation endpoint (Go -> Python PyTorch/LiteRT -> Rust SVG/vtracer, with native fallback)
+	// End-to-end SVG Generation endpoint (Go -> Python PyTorch -> Rust SVG/vtracer, with native fallback)
 	mux.HandleFunc("/api/generate", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "POST required")
@@ -430,7 +418,7 @@ func main() {
 
 		totalStart := time.Now()
 
-		// Step 1: Call Python PyTorch / LiteRT ML Worker (or native single-binary fallback)
+		// Step 1: Call Python PyTorch ML Worker (or native single-binary fallback)
 		mlReq := MLInferRequest{
 			Prompt:         req.Prompt,
 			SystemPrompt:   req.SystemPrompt,
@@ -684,8 +672,8 @@ func hasArg(flag string) bool {
 
 func inferPipelineFromModel(modelID string) string {
 	lower := strings.ToLower(modelID)
-	if strings.Contains(lower, "litert") {
-		return "litert-vtracer"
+	if strings.Contains(lower, "litert") || strings.Contains(lower, "neural") {
+		return "neural-vtracer"
 	}
 	if strings.Contains(lower, "sd") || strings.Contains(lower, "diffusion") || strings.Contains(lower, "flux") {
 		return "diffusion-vtracer"
@@ -752,8 +740,8 @@ func searchHuggingFaceHub(hfToken, query, pipelineFilter string) ([]CuratedModel
 			pipeline = "diffusion-vtracer"
 			framework = "PyTorch Diffusers + Rust vtracer"
 		} else if containsTag(rm.Tags, "litert") || containsTag(rm.Tags, "tflite") {
-			pipeline = "litert-vtracer"
-			framework = "LiteRT / PyTorch + Rust vtracer"
+			pipeline = "neural-vtracer"
+			framework = "PyTorch raster + Rust vtracer"
 		}
 
 		if pipelineFilter != "" && pipelineFilter != "all" && pipeline != pipelineFilter {

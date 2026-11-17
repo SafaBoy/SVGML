@@ -25,7 +25,7 @@ RESP_DIRECT=$(curl -fsS -X POST "$BASE_URL/api/generate" \
   }')
 echo "$RESP_DIRECT" | python3 -c "import sys, json; d=json.load(sys.stdin); print(f'  -> Generated ID: {d[\"id\"]}, Colors: {d[\"extracted_colors\"]}, Paths: {d[\"path_count\"]}, TotalMs: {d[\"total_ms\"]}ms')"
 
-echo "[3/4] Testing LiteRT/Diffusion + Rust vtracer Color Vectorization Pipeline..."
+echo "[3/4] Testing Neural/Diffusion + Rust vtracer Color Vectorization Pipeline..."
 RESP_VTRACER=$(curl -fsS -X POST "$BASE_URL/api/generate" \
   -H "Content-Type: application/json" \
   -d '{

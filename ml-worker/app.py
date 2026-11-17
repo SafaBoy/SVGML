@@ -63,17 +63,7 @@ try:
 except ImportError:
     HF_HUB_AVAILABLE = False
 
-try:
-    from ai_edge_litert.interpreter import Interpreter as LiteRTInterpreter  # type: ignore
-    LITERT_AVAILABLE = True
-except ImportError:
-    try:
-        from tflite_runtime.interpreter import Interpreter as LiteRTInterpreter  # type: ignore
-        LITERT_AVAILABLE = True
-    except ImportError:
-        LITERT_AVAILABLE = False
-
-app = FastAPI(title="SVGML PyTorch & LiteRT Inference Worker", version="0.2.0")
+app = FastAPI(title="SVGML PyTorch Inference Worker", version="0.2.0")
 
 # In-memory model cache and download state tracking
 LOADED_TEXT_MODELS: Dict[str, tuple] = {}
@@ -106,7 +96,7 @@ class InferRequest(BaseModel):
     system_prompt: Optional[str] = None
     negative_prompt: Optional[str] = None
     model_id: str = "Norod78/gpt-fluentui-flat-svg"
-    pipeline: str = "direct-svg"  # "direct-svg" | "diffusion-vtracer" | "litert-vtracer"
+    pipeline: str = "direct-svg"  # "direct-svg" | "diffusion-vtracer" | "neural-vtracer"
     style: str = "vibrant-gradient"
     palette: Optional[List[str]] = None
     steps: Optional[int] = 8
@@ -152,8 +142,6 @@ class ImageToLineArtResponse(BaseModel):
 
 def is_model_cached_locally(model_id: str) -> tuple[bool, float]:
     """Checks if a Hugging Face model has weight files downloaded in the local HF cache."""
-    if model_id.startswith("litert/"):
-        return True, 12.4
     if not HF_HUB_AVAILABLE:
         return False, 0.0
     try:
@@ -265,7 +253,6 @@ def health():
         "device": DEVICE,
         "transformers_available": TRANSFORMERS_AVAILABLE,
         "diffusers_available": DIFFUSERS_AVAILABLE,
-        "litert_available": LITERT_AVAILABLE,
         "loaded_models": list(LOADED_TEXT_MODELS.keys())
         + list(LOADED_DIFFUSION_MODELS.keys())
         + list(LOADED_VLM_MODELS.keys()),
@@ -297,16 +284,6 @@ def models_status():
         except Exception as exc:
             logger.debug("Error scanning HF cache: %s", exc)
 
-    # Built-in LiteRT model is always ready
-    statuses["litert/neural-svg-synthesizer-v1"] = {
-        "model_id": "litert/neural-svg-synthesizer-v1",
-        "status": "ready",
-        "progress": 100,
-        "downloaded_mb": 12.4,
-        "total_mb": 12.4,
-        "loaded_in_memory": True,
-    }
-
     # 2. Overlay active/recent download jobs
     with DOWNLOAD_LOCK:
         for mid, job in DOWNLOAD_JOBS.items():
@@ -328,14 +305,6 @@ def download_model(req: DownloadModelRequest):
     model_id = req.model_id.strip()
     if not model_id:
         raise HTTPException(status_code=400, detail="model_id is required")
-
-    if model_id.startswith("litert/"):
-        return {
-            "model_id": model_id,
-            "status": "ready",
-            "progress": 100,
-            "message": "Built-in LiteRT/PyTorch neural model is already ready.",
-        }
 
     with DOWNLOAD_LOCK:
         existing = DOWNLOAD_JOBS.get(model_id)
@@ -429,9 +398,9 @@ def infer(req: InferRequest):
         and (cached or os.getenv("HF_EAGER_DOWNLOAD", "false").lower() == "true")
     )
 
-    # 1. LiteRT / PyTorch Neural Color Field + Rust vtracer pipeline
-    if req.pipeline == "litert-vtracer":
-        img_b64, backend_label = run_litert_or_pytorch_cppn_raster(
+    # 1. PyTorch neural color-field raster + Rust vtracer pipeline
+    if req.pipeline in ("neural-vtracer", "litert-vtracer"):  # second id kept for old clients
+        img_b64, backend_label = run_neural_raster_synthesizer(
             req.prompt,
             req.style,
             palette,
@@ -477,7 +446,7 @@ def infer(req: InferRequest):
             except Exception as exc:
                 logger.warning("HF Diffusers fallback triggered for %s: %s", req.model_id, exc)
 
-        img_b64, backend_label = run_litert_or_pytorch_cppn_raster(
+        img_b64, backend_label = run_neural_raster_synthesizer(
             req.prompt,
             req.style,
             palette,
@@ -1580,7 +1549,7 @@ def build_compositional_svg_overlays(
     return "\n".join(layers)
 
 
-def run_litert_or_pytorch_cppn_raster(
+def run_neural_raster_synthesizer(
     prompt: str,
     style: str,
     palette: List[str],
@@ -1607,9 +1576,9 @@ def run_litert_or_pytorch_cppn_raster(
 
     if TORCH_AVAILABLE:
         torch.manual_seed(seed)
-        backend_label = "pytorch-litert-cppn" if LITERT_AVAILABLE else "pytorch-cppn-tensor"
+        backend_label = "pytorch-cppn-raster"
     else:
-        backend_label = "litert-fallback-synthesizer"
+        backend_label = "pillow-cppn-raster"
 
     # Dark rich background emblem canvas so Rust vtracer extracts clean multi-layered vector paths
     bg_dark = (18, 22, 42)

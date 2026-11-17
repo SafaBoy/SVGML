@@ -47,7 +47,7 @@ export default function App() {
   const [style, setStyle] = useState('vibrant-gradient');
   const [customPalette, setCustomPalette] = useState<string[]>(STYLE_PRESETS[0].colors);
   const [selectedModel, setSelectedModel] = useState<string>('Norod78/gpt-fluentui-flat-svg');
-  const [pipeline, setPipeline] = useState<'direct-svg' | 'diffusion-vtracer' | 'litert-vtracer'>('direct-svg');
+  const [pipeline, setPipeline] = useState<'direct-svg' | 'diffusion-vtracer' | 'neural-vtracer'>('direct-svg');
   const [colorPrecision, setColorPrecision] = useState<number>(6);
   const [filterSpeckle, setFilterSpeckle] = useState<number>(4);
 
@@ -308,7 +308,7 @@ export default function App() {
     e.preventDefault();
     const id = customModelId.trim();
     if (!id) return;
-    const inferredPipeline: 'direct-svg' | 'diffusion-vtracer' | 'litert-vtracer' =
+    const inferredPipeline: 'direct-svg' | 'diffusion-vtracer' | 'neural-vtracer' =
       id.toLowerCase().includes('sd') || id.toLowerCase().includes('diffusion')
         ? 'diffusion-vtracer'
         : 'direct-svg';
@@ -920,7 +920,7 @@ export default function App() {
                     {[
                       { id: 'direct-svg', title: 'Direct SVG LLM', sub: 'PyTorch + Rust XML' },
                       { id: 'diffusion-vtracer', title: 'Diffusion + vtracer', sub: 'PyTorch + Rust Trace' },
-                      { id: 'litert-vtracer', title: 'LiteRT Neural', sub: 'LiteRT + Rust Trace' },
+                      { id: 'neural-vtracer', title: 'Neural Raster', sub: 'PyTorch + Rust Trace' },
                     ].map((p) => (
                       <button
                         key={p.id}

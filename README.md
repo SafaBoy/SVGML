@@ -1,6 +1,6 @@
-# SVGML Studio — PyTorch & LiteRT Color SVG Generator
+# SVGML Studio — PyTorch Color SVG Generator
 
-Full-stack AI Scalable Vector Graphics (SVG) generation studio combining **Hugging Face (PyTorch & LiteRT)** models, a **Go** API Gateway & Hugging Face Hub Manager, a **Rust** Color Vectorization (`vtracer`) & SVG Post-Processing Engine, and a **React + TypeScript + Tailwind CSS** frontend.
+Full-stack AI Scalable Vector Graphics (SVG) generation studio combining **Hugging Face PyTorch** models, a **Go** API Gateway & Hugging Face Hub Manager, a **Rust** Color Vectorization (`vtracer`) & SVG Post-Processing Engine, and a **React + TypeScript + Tailwind CSS** frontend.
 
 ## Architecture
 
@@ -19,10 +19,10 @@ Full-stack AI Scalable Vector Graphics (SVG) generation studio combining **Huggi
                    │ 1. ML Inference (/infer)          │ 2. Vectorize / Colorize
                    ▼                                   ▼
 ┌──────────────────────────────────────┐  ┌───────────────────────────────┐
-│ Python PyTorch & LiteRT (:18082)     │  │ Rust SVG Engine (:18081)      │
+│ Python PyTorch Worker (:18082)       │  │ Rust SVG Engine (:18081)      │
 │ • Direct Text-to-SVG HF Transformers │  │ • Hierarchical Color vtracer  │
 │ • Text-to-Image HF Diffusers         │  │ • SVG Sanitization & ViewBox  │
-│ • LiteRT / PyTorch Neural CPPN Field │  │ • Multi-Color Palette Injector│
+│ • PyTorch Neural Color-Field Raster  │  │ • Multi-Color Palette Injector│
 └──────────────────────────────────────┘  └───────────────────────────────┘
 ```
 
@@ -61,8 +61,10 @@ See `.env.example` for a copy-pasteable set of defaults.
 2. **Diffusion + Rust Color Vectorization (`diffusion-vtracer`)**:
    - `segmind/tiny-sd` (PyTorch Diffusers -> Rust `vtracer` stacked color splines)
    - `stabilityai/sdxl-turbo` (1-step Diffusion -> Rust `vtracer`)
-3. **LiteRT / PyTorch Neural Color Field (`litert-vtracer`)**:
-   - `litert/neural-svg-synthesizer-v1` (Sub-second CPU/Edge neural color synthesis -> Rust `vtracer`)
+3. **PyTorch Neural Color Field (`neural-vtracer`)**:
+   - Seeds a wide neural color field with PyTorch, rasterises it with Pillow, then traces it with Rust
+     `vtracer`. Fully local, no model download; the old `litert-vtracer` id is still accepted as an alias.
+   - No LiteRT runtime or `.tflite` weights ship with this project — earlier versions implied one.
 
 ## Quick Start
 
@@ -84,8 +86,7 @@ See `.env.example` for a copy-pasteable set of defaults.
 `build.sh` picks the PyTorch wheel by itself: `nvidia-smi` present means the CUDA 12.6 build (the only
 one that still ships Pascal kernels for cards like the GTX 1050 Ti), otherwise CPU-only. Force it with
 `--cpu` / `--gpu` or `SVGML_TORCH=cpu|cu126|none`. Everything else comes from
-`ml-worker/requirements.txt`; `ai-edge-litert` is skipped automatically on Python 3.13+ (it has no
-wheels there) and the script says so.
+`ml-worker/requirements.txt`.
 
 ### Verification & Stop
 ```bash
