@@ -273,6 +273,11 @@ export default function App() {
     if (e) e.stopPropagation();
     const trimmed = modelId.trim();
     if (!trimmed) return;
+    const reason = models.find((m) => m.id === trimmed)?.unsupported_reason;
+    if (reason) {
+      notify(`${trimmed} cannot be downloaded: ${reason}`);
+      return;
+    }
 
     setModelStatuses((prev) => ({
       ...prev,
@@ -355,6 +360,10 @@ export default function App() {
   };
 
   const handleSelectModel = (m: CuratedModel) => {
+    if (m.unsupported_reason) {
+      notify(`${m.id} cannot be used: ${m.unsupported_reason}`);
+      return;
+    }
     setSelectedModel(m.id);
     setPipeline(m.pipeline);
   };
@@ -1788,15 +1797,19 @@ export default function App() {
                 const st = modelStatuses[m.id];
                 const isReady = st?.status === 'ready';
                 const isDownloading = st?.status === 'downloading';
+                const isUnsupported = Boolean(m.unsupported_reason);
 
                 return (
                   <div
                     key={m.id}
                     onClick={() => handleSelectModel(m)}
-                    className={`p-3.5 rounded-xl border cursor-pointer transition ${
-                      isSelected
-                        ? 'bg-indigo-950/60 border-indigo-500'
-                        : 'bg-slate-950/70 border-slate-800/90 hover:border-slate-700'
+                    title={m.unsupported_reason}
+                    className={`p-3.5 rounded-xl border transition ${
+                      isUnsupported
+                        ? 'bg-slate-950/60 border-amber-900/70 cursor-not-allowed'
+                        : isSelected
+                          ? 'bg-indigo-950/60 border-indigo-500 cursor-pointer'
+                          : 'bg-slate-950/70 border-slate-800/90 hover:border-slate-700 cursor-pointer'
                     }`}
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1807,7 +1820,16 @@ export default function App() {
                         <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-cyan-300">
                           {m.pipeline}
                         </span>
-                        {isReady ? (
+                        {isUnsupported && (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-950/90 border border-amber-700/70 text-amber-300">
+                            Unsupported
+                          </span>
+                        )}
+                        {isUnsupported ? (
+                          <span className="text-[10px] px-2.5 py-1 rounded-full bg-slate-800 text-slate-400">
+                            Not available
+                          </span>
+                        ) : isReady ? (
                           <span className="inline-flex items-center gap-1 text-[10px] px-2.5 py-1 rounded-full bg-emerald-950/90 border border-emerald-700/70 text-emerald-300 font-medium">
                             <CheckCircle2 className="w-3 h-3" />
                             Downloaded ({st.downloaded_mb} MB)
@@ -1834,6 +1856,12 @@ export default function App() {
                     <p className="text-[11px] text-slate-400 mt-1.5 line-clamp-2">
                       {m.description}
                     </p>
+
+                    {m.unsupported_reason && (
+                      <p className="mt-1.5 text-[10px] text-amber-300/90">
+                        {m.unsupported_reason}
+                      </p>
+                    )}
 
                     {isDownloading && (
                       <div className="mt-2 space-y-1">

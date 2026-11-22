@@ -55,6 +55,9 @@ See `.env.example` for a copy-pasteable set of defaults.
    - `OmniSVG/OmniSVG1.1_4B` — **not loadable as a plain HF checkpoint**: the repo ships weights only
      and inference needs OmniSVG's own `SketchDecoder` + `SVGTokenizer` (path tokens, not XML).
      Selecting it returns an explicit diagnostic instead of a fake result.
+   Both of those repositories stay in `/api/models/curated` with an `unsupported_reason` so search
+   results can explain them; the model hub marks them **Unsupported**, refuses to select or download
+   them, and shows the reason. Direct API calls with either id still get the explicit diagnostic.
    If no `direct-svg` model can be loaded (not cached, out of memory, or unsupported), the worker
    generates a deterministic procedural SVG and reports that honestly in `backend_used`
    (`... | hf skipped: <reason>`), with `model_used = svgml-procedural-templates`.

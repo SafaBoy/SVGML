@@ -9,6 +9,7 @@ export interface CuratedModel {
   likes: number;
   recommended: boolean;
   cpu_friendly: boolean;
+  unsupported_reason?: string;
 }
 
 export interface ModelStatus {

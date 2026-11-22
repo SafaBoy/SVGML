@@ -38,6 +38,9 @@ type CuratedModel struct {
 	Likes       int      `json:"likes"`
 	Recommended bool     `json:"recommended"`
 	CPUFriendly bool     `json:"cpu_friendly"`
+	// Non-empty when the repository cannot be used by this worker as-is.
+	// The studio shows the reason and refuses to select or download the model.
+	UnsupportedReason string `json:"unsupported_reason,omitempty"`
 }
 
 type GenerateRequest struct {
@@ -199,28 +202,30 @@ var curatedModels = []CuratedModel{
 		CPUFriendly: true,
 	},
 	{
-		ID:          "OmniSVG/OmniSVG1.1_4B",
-		Name:        "OmniSVG 1.1 (4B Multimodal SVG Generator)",
-		Pipeline:    "direct-svg",
-		Framework:   "PyTorch / Qwen2.5-VL (8.2 GB)",
-		Description: "State-of-the-art 4B multimodal SVG foundation model capable of generating complex colored icons and illustrations.",
-		Tags:        []string{"omnisvg", "text-to-svg", "multimodal", "pytorch", "gpu-recommended"},
-		Downloads:   68900,
-		Likes:       890,
-		Recommended: false,
-		CPUFriendly: false,
+		ID:                "OmniSVG/OmniSVG1.1_4B",
+		Name:              "OmniSVG 1.1 (4B Multimodal SVG Generator)",
+		Pipeline:          "direct-svg",
+		Framework:         "PyTorch / Qwen2.5-VL (8.2 GB)",
+		Description:       "4B multimodal SVG model. Not runnable here: checkpoints contain SVG path tokens that need the upstream SketchDecoder and SVGTokenizer, which are not bundled.",
+		Tags:              []string{"omnisvg", "text-to-svg", "multimodal", "pytorch", "gpu-recommended"},
+		Downloads:         68900,
+		Likes:             890,
+		Recommended:       false,
+		CPUFriendly:       false,
+		UnsupportedReason: "OmniSVG checkpoints emit SVG path tokens that require the upstream SketchDecoder and custom SVGTokenizer; this worker has no decoder (and no tokenizer files ship in the repo).",
 	},
 	{
-		ID:          "mohannad-tazi/Llama-3.1-8B-Instruct-text-to-svg",
-		Name:        "Llama-3.1 8B Instruct Text-to-SVG",
-		Pipeline:    "direct-svg",
-		Framework:   "PyTorch / Transformers (16 GB)",
-		Description: "Llama 3.1 8B fine-tuned on SVGX/SVG-Stack datasets for rich colored vector graphics generation.",
-		Tags:        []string{"llama-3.1", "text-to-svg", "svg-stack", "pytorch"},
-		Downloads:   9850,
-		Likes:       94,
-		Recommended: false,
-		CPUFriendly: false,
+		ID:                "mohannad-tazi/Llama-3.1-8B-Instruct-text-to-svg",
+		Name:              "Llama-3.1 8B Instruct Text-to-SVG",
+		Pipeline:          "direct-svg",
+		Framework:         "PyTorch / Transformers (16 GB)",
+		Description:       "Llama 3.1 8B text-to-SVG fine-tune. Not runnable here: the repository holds a LoRA adapter, not standalone model weights.",
+		Tags:              []string{"llama-3.1", "text-to-svg", "svg-stack", "pytorch"},
+		Downloads:         9850,
+		Likes:             94,
+		Recommended:       false,
+		CPUFriendly:       false,
+		UnsupportedReason: "This repository contains only a LoRA adapter (9 MB), not full Llama 3.1 weights; the base model is not bundled and cannot be loaded directly.",
 	},
 }
 
