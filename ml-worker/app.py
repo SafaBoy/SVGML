@@ -59,9 +59,11 @@ except ImportError:
 
 try:
     from huggingface_hub import HfApi, hf_hub_download, scan_cache_dir
+    from huggingface_hub.utils import tqdm as hf_tqdm
     HF_HUB_AVAILABLE = True
 except ImportError:
     HF_HUB_AVAILABLE = False
+    hf_tqdm = object  # downloads are unavailable anyway; keeps the class definable
 
 app = FastAPI(title="SVGML PyTorch Inference Worker", version="0.2.0")
 
@@ -73,6 +75,37 @@ MODEL_DEVICE: Dict[str, str] = {}
 MODEL_CONFIG_CACHE: Dict[str, Any] = {}
 DOWNLOAD_JOBS: Dict[str, Dict[str, Any]] = {}
 DOWNLOAD_LOCK = threading.Lock()
+
+
+class _JobProgress(hf_tqdm):
+    """tqdm hook that reports absolute downloaded bytes into an active download job."""
+
+    def __init__(self, model_id: str, total_bytes: int, baseline_bytes: int = 0, **kwargs: Any):
+        self._model_id = model_id
+        self._total_bytes = total_bytes
+        self._baseline_bytes = baseline_bytes
+        super().__init__(**kwargs)
+        # A resumed bar starts at ``initial`` bytes; account for those too.
+        self._high_water = max(0, int(self.n))
+        self._report()
+
+    def update(self, n: int) -> bool:
+        result = super().update(n)
+        # Retries rewind the bar; keep the peak so reported progress never jumps back.
+        self._high_water = max(self._high_water, max(0, int(self.n)))
+        self._report()
+        return result
+
+    def _report(self) -> None:
+        done = self._baseline_bytes + self._high_water
+        with DOWNLOAD_LOCK:
+            job = DOWNLOAD_JOBS.get(self._model_id)
+            if job is None or job.get("status") != "downloading":
+                return
+            job["downloaded_mb"] = round(done / (1024 * 1024), 1)
+            if self._total_bytes > 0:
+                job["progress"] = max(1, min(100, int(done / self._total_bytes * 100)))
+
 
 DEFAULT_PALETTES = {
     "vibrant-gradient": ["#6366F1", "#EC4899", "#06B6D4", "#F59E0B", "#10B981"],
