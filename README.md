@@ -94,6 +94,9 @@ exports `HF_CACHE_DIR` and compose bind-mounts it into the ML worker, so checkpo
 downloaded are available immediately. Set `HF_CACHE_DIR=/some/other/cache` to point elsewhere, or
 `HF_CACHE_DIR=hf_cache` to fall back to the project's named volume.
 
+During a fresh download the model hub's progress bar advances with transferred bytes on each status
+poll (every 1.5 s) instead of jumping once per file; cached checkpoints are credited in full.
+
 ### Option 3: Local Native Execution (Go + Rust + Python Venv + Vite)
 ```bash
 ./scripts/build.sh --local
