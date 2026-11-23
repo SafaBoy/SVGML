@@ -1,4 +1,5 @@
 import base64
+import functools
 import hashlib
 import io
 import logging
@@ -227,6 +228,7 @@ def download_model_worker(model_id: str):
             }
 
         downloaded_bytes = 0
+        baseline_bytes = 0
         for idx, sibling in enumerate(files_to_get):
             fname = sibling.rfilename
             fsize = sibling.size or 0
@@ -238,8 +240,19 @@ def download_model_worker(model_id: str):
                     )
 
             logger.info("Downloading %s: %s (%.1f MB)", model_id, fname, fsize / (1024 * 1024))
-            hf_hub_download(repo_id=model_id, filename=fname, token=hf_token)
-            downloaded_bytes += fsize
+            progress_class = functools.partial(
+                _JobProgress, model_id, total_bytes, downloaded_bytes
+            )
+            hf_hub_download(
+                repo_id=model_id,
+                filename=fname,
+                token=hf_token,
+                tqdm_class=progress_class,
+            )
+            # Reconcile absolutely: cached files never open a bar, and retries must
+            # not double-count bytes already credited for earlier files.
+            downloaded_bytes = baseline_bytes + fsize
+            baseline_bytes = downloaded_bytes
 
             with DOWNLOAD_LOCK:
                 DOWNLOAD_JOBS[model_id]["downloaded_mb"] = round(downloaded_bytes / (1024 * 1024), 1)
