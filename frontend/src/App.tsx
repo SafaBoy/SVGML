@@ -833,7 +833,7 @@ export default function App() {
         : `ML Worker (${health?.ml_worker?.device || 'cpu'})`;
 
   return (
-    <div className="min-h-screen w-full overflow-x-hidden flex flex-col bg-slate-950 text-slate-100">
+    <div className="min-h-screen w-full overflow-x-clip flex flex-col bg-slate-950 text-slate-100">
       {toast && (
         <div
           role="status"
@@ -851,8 +851,9 @@ export default function App() {
           </button>
         </div>
       )}
-      {/* Top Header — Mobile & Desktop Responsive */}
-      <header className="border-b border-slate-800/80 bg-slate-900/80 backdrop-blur-md sticky top-0 z-30">
+      {/* Top Header & Workspace Navigation — pinned together */}
+      <div className="sticky top-0 z-40">
+      <header className="border-b border-slate-800/80 bg-slate-900/80 backdrop-blur-md">
         <div className="max-w-7xl mx-auto px-3 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-2.5">
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-tr from-indigo-500 via-pink-500 to-cyan-400 flex items-center justify-center shadow-lg shadow-indigo-500/20 shrink-0">
@@ -890,6 +891,80 @@ export default function App() {
           </div>
         </div>
       </header>
+
+      {/* Workspace & Page Navigation Bar (Desktop & Mobile) */}
+      <nav className="inset-x-0 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 px-1.5 py-1.5 shadow-2xl">
+        <div className="grid grid-cols-6 gap-1 max-w-3xl mx-auto">
+          {[
+            {
+              id: 'create',
+              label: 'Prompt',
+              icon: Sparkles,
+              onClick: () => {
+                setStudioMode('text');
+                setMobileSection('create');
+              },
+            },
+            {
+              id: 'photo',
+              label: 'Photo→SVG',
+              icon: Camera,
+              onClick: () => {
+                setStudioMode('photo');
+                setMobileSection('photo');
+              },
+            },
+            {
+              id: 'editor',
+              label: 'Edit SVG',
+              icon: SlidersHorizontal,
+              onClick: () => {
+                setStudioMode('editor');
+                setMobileSection('editor');
+              },
+            },
+            {
+              id: 'canvas',
+              label: 'Canvas',
+              icon: Download,
+              onClick: () => setMobileSection('canvas'),
+            },
+            {
+              id: 'models',
+              label: 'HF Models',
+              icon: CloudDownload,
+              onClick: () => setMobileSection('models'),
+            },
+            {
+              id: 'gallery',
+              label: `Gallery`,
+              icon: Grid,
+              onClick: () => setMobileSection('gallery'),
+            },
+          ].map((item) => {
+            const Icon = item.icon;
+            const active =
+              mobileSection === item.id ||
+              (item.id === 'editor' && studioMode === 'editor' && mobileSection !== 'models');
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={item.onClick}
+                className={`min-h-[48px] rounded-xl flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1.5 text-[10px] sm:text-xs font-medium transition ${
+                  active
+                    ? 'bg-gradient-to-r from-indigo-600/30 to-cyan-600/30 text-cyan-200 border border-cyan-500/50 shadow'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+                }`}
+              >
+                <Icon className="w-4 h-4 shrink-0" />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </nav>
+      </div>
 
       {/* Main Content Grid — Mobile-First Tabbed / Stacked + Desktop 12-Col */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 py-4 sm:py-6 grid grid-cols-1 lg:grid-cols-12 gap-5">
@@ -2258,78 +2333,6 @@ export default function App() {
         </section>
       </main>
 
-      {/* Bottom Workspace & Page Navigation Bar (Desktop & Mobile) */}
-      <nav className="sticky bottom-0 inset-x-0 z-40 mt-auto bg-slate-900/95 backdrop-blur-md border-t border-slate-800 px-1.5 py-1.5 shadow-2xl">
-        <div className="grid grid-cols-6 gap-1 max-w-3xl mx-auto">
-          {[
-            {
-              id: 'create',
-              label: 'Prompt',
-              icon: Sparkles,
-              onClick: () => {
-                setStudioMode('text');
-                setMobileSection('create');
-              },
-            },
-            {
-              id: 'photo',
-              label: 'Photo→SVG',
-              icon: Camera,
-              onClick: () => {
-                setStudioMode('photo');
-                setMobileSection('photo');
-              },
-            },
-            {
-              id: 'editor',
-              label: 'Edit SVG',
-              icon: SlidersHorizontal,
-              onClick: () => {
-                setStudioMode('editor');
-                setMobileSection('editor');
-              },
-            },
-            {
-              id: 'canvas',
-              label: 'Canvas',
-              icon: Download,
-              onClick: () => setMobileSection('canvas'),
-            },
-            {
-              id: 'models',
-              label: 'HF Models',
-              icon: CloudDownload,
-              onClick: () => setMobileSection('models'),
-            },
-            {
-              id: 'gallery',
-              label: `Gallery`,
-              icon: Grid,
-              onClick: () => setMobileSection('gallery'),
-            },
-          ].map((item) => {
-            const Icon = item.icon;
-            const active =
-              mobileSection === item.id ||
-              (item.id === 'editor' && studioMode === 'editor' && mobileSection !== 'models');
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={item.onClick}
-                className={`min-h-[48px] rounded-xl flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1.5 text-[10px] sm:text-xs font-medium transition ${
-                  active
-                    ? 'bg-gradient-to-r from-indigo-600/30 to-cyan-600/30 text-cyan-200 border border-cyan-500/50 shadow'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
-                }`}
-              >
-                <Icon className="w-4 h-4 shrink-0" />
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      </nav>
     </div>
   );
 }
