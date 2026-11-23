@@ -40,37 +40,37 @@ import {
 import { API_BASE, API_TOKEN, GALLERY_PAGE_SIZE, apiFetch } from './api';
 import { createSamplePhotoDataUrl } from './samplePhoto';
 import type { CuratedModel, ModelStatus, GalleryItem } from './types';
+import { loadSession, saveSession, type SessionState } from './session';
 
 export default function App() {
-  const [studioMode, setStudioMode] = useState<'text' | 'photo' | 'editor'>('text');
-  const [prompt, setPrompt] = useState(SAMPLE_PROMPTS[0]);
-  const [style, setStyle] = useState('vibrant-gradient');
-  const [customPalette, setCustomPalette] = useState<string[]>(STYLE_PRESETS[0].colors);
-  const [selectedModel, setSelectedModel] = useState<string>('Norod78/gpt-fluentui-flat-svg');
-  const [pipeline, setPipeline] = useState<'direct-svg' | 'diffusion-vtracer' | 'neural-vtracer'>('direct-svg');
-  const [colorPrecision, setColorPrecision] = useState<number>(6);
-  const [filterSpeckle, setFilterSpeckle] = useState<number>(4);
+  const [initialSession] = useState(loadSession);
+  const [studioMode, setStudioMode] = useState<'text' | 'photo' | 'editor'>(initialSession.studioMode);
+  const [prompt, setPrompt] = useState(initialSession.prompt);
+  const [style, setStyle] = useState(initialSession.style);
+  const [customPalette, setCustomPalette] = useState<string[]>(initialSession.customPalette);
+  const [selectedModel, setSelectedModel] = useState<string>(initialSession.selectedModel);
+  const [pipeline, setPipeline] = useState<'direct-svg' | 'diffusion-vtracer' | 'neural-vtracer'>(initialSession.pipeline);
+  const [colorPrecision, setColorPrecision] = useState<number>(initialSession.colorPrecision);
+  const [filterSpeckle, setFilterSpeckle] = useState<number>(initialSession.filterSpeckle);
 
   // Photo-to-Line-Art SVG state
   const [uploadedPhoto, setUploadedPhoto] = useState<string | null>(null);
   const [uploadedFilename, setUploadedFilename] = useState<string>('sample-pop-portrait.png');
-  const [lineArtMode, setLineArtMode] = useState<string>('colored-line-art');
-  const [lineThickness, setLineThickness] = useState<number>(2);
-  const [colorLevels, setColorLevels] = useState<number>(8);
-  const [edgeThreshold, setEdgeThreshold] = useState<number>(0.18);
-  const [useCustomPaletteOnPhoto, setUseCustomPaletteOnPhoto] = useState<boolean>(false);
+  const [lineArtMode, setLineArtMode] = useState<string>(initialSession.lineArtMode);
+  const [lineThickness, setLineThickness] = useState<number>(initialSession.lineThickness);
+  const [colorLevels, setColorLevels] = useState<number>(initialSession.colorLevels);
+  const [edgeThreshold, setEdgeThreshold] = useState<number>(initialSession.edgeThreshold);
+  const [useCustomPaletteOnPhoto, setUseCustomPaletteOnPhoto] = useState<boolean>(initialSession.useCustomPaletteOnPhoto);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // SVG Editor & AI Enhancer state
-  const [enhanceMode, setEnhanceMode] = useState<string>('ai-gradient-glow');
-  const [enhanceInstruction, setEnhanceInstruction] = useState<string>(
-    'Add glowing neon cyber accents and a vibrant holographic halo'
-  );
-  const [enhanceIntensity, setEnhanceIntensity] = useState<number>(5);
-  const [editorRotation, setEditorRotation] = useState<number>(0);
-  const [editorScale, setEditorScale] = useState<number>(100);
-  const [editorStrokeWidth, setEditorStrokeWidth] = useState<number>(0);
-  const [editorStrokeColor, setEditorStrokeColor] = useState<string>('#00F0FF');
+  const [enhanceMode, setEnhanceMode] = useState<string>(initialSession.enhanceMode);
+  const [enhanceInstruction, setEnhanceInstruction] = useState<string>(initialSession.enhanceInstruction);
+  const [enhanceIntensity, setEnhanceIntensity] = useState<number>(initialSession.enhanceIntensity);
+  const [editorRotation, setEditorRotation] = useState<number>(initialSession.editorRotation);
+  const [editorScale, setEditorScale] = useState<number>(initialSession.editorScale);
+  const [editorStrokeWidth, setEditorStrokeWidth] = useState<number>(initialSession.editorStrokeWidth);
+  const [editorStrokeColor, setEditorStrokeColor] = useState<string>(initialSession.editorStrokeColor);
   const [svgHistory, setSvgHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
   const [savedNotice, setSavedNotice] = useState<boolean>(false);
@@ -86,17 +86,15 @@ export default function App() {
   const svgFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // HF Model Inference Hyperparameters & System Prompt state
-  const [systemPrompt, setSystemPrompt] = useState<string>(SYSTEM_PROMPT_PRESETS[0].prompt);
-  const [temperature, setTemperature] = useState<number>(0.75);
-  const [topP, setTopP] = useState<number>(0.92);
-  const [maxNewTokens, setMaxNewTokens] = useState<number>(512);
-  const [inferenceSteps, setInferenceSteps] = useState<number>(8);
-  const [guidanceScale, setGuidanceScale] = useState<number>(7.5);
-  const [negativePrompt, setNegativePrompt] = useState<string>(
-    'photo, blurry, noisy, grainy, watermark, text, monochrome'
-  );
-  const [seedInput, setSeedInput] = useState<string>('');
-  const [showModelParams, setShowModelParams] = useState<boolean>(true);
+  const [systemPrompt, setSystemPrompt] = useState<string>(initialSession.systemPrompt);
+  const [temperature, setTemperature] = useState<number>(initialSession.temperature);
+  const [topP, setTopP] = useState<number>(initialSession.topP);
+  const [maxNewTokens, setMaxNewTokens] = useState<number>(initialSession.maxNewTokens);
+  const [inferenceSteps, setInferenceSteps] = useState<number>(initialSession.inferenceSteps);
+  const [guidanceScale, setGuidanceScale] = useState<number>(initialSession.guidanceScale);
+  const [negativePrompt, setNegativePrompt] = useState<string>(initialSession.negativePrompt);
+  const [seedInput, setSeedInput] = useState<string>(initialSession.seedInput);
+  const [showModelParams, setShowModelParams] = useState<boolean>(initialSession.showModelParams);
 
   const [models, setModels] = useState<CuratedModel[]>([]);
   const [modelStatuses, setModelStatuses] = useState<Record<string, ModelStatus>>({});
@@ -114,10 +112,10 @@ export default function App() {
   const [galleryHasMore, setGalleryHasMore] = useState(false);
   const [galleryLoading, setGalleryLoading] = useState(false);
 
-  const [viewMode, setViewMode] = useState<'preview' | 'split' | 'code'>('preview');
+  const [viewMode, setViewMode] = useState<'preview' | 'split' | 'code'>(initialSession.viewMode);
   const [mobileSection, setMobileSection] = useState<
     'create' | 'photo' | 'editor' | 'canvas' | 'models' | 'gallery'
-  >('create');
+  >(initialSession.mobileSection);
   const [lightCanvas, setLightCanvas] = useState(false);
   const [copied, setCopied] = useState(false);
   const [health, setHealth] = useState<any>(null);
@@ -132,6 +130,83 @@ export default function App() {
     setUploadedPhoto(sample.dataUrl);
     setUploadedFilename(sample.filename);
   }, []);
+
+  // Persist only user-adjustable settings; artwork and gallery stay on the server.
+  const lastSaved = useRef(JSON.stringify(initialSession));
+  useEffect(() => {
+    const next: SessionState = {
+      studioMode,
+      mobileSection,
+      prompt,
+      style,
+      customPalette,
+      selectedModel,
+      pipeline,
+      colorPrecision,
+      filterSpeckle,
+      lineArtMode,
+      lineThickness,
+      colorLevels,
+      edgeThreshold,
+      useCustomPaletteOnPhoto,
+      enhanceMode,
+      enhanceInstruction,
+      enhanceIntensity,
+      editorRotation,
+      editorScale,
+      editorStrokeWidth,
+      editorStrokeColor,
+      systemPrompt,
+      temperature,
+      topP,
+      maxNewTokens,
+      inferenceSteps,
+      guidanceScale,
+      negativePrompt,
+      seedInput,
+      showModelParams,
+      viewMode,
+    };
+    const serialized = JSON.stringify(next);
+    if (serialized === lastSaved.current) return;
+    const timer = setTimeout(() => {
+      saveSession(next);
+      lastSaved.current = serialized;
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [
+    studioMode,
+    mobileSection,
+    prompt,
+    style,
+    customPalette,
+    selectedModel,
+    pipeline,
+    colorPrecision,
+    filterSpeckle,
+    lineArtMode,
+    lineThickness,
+    colorLevels,
+    edgeThreshold,
+    useCustomPaletteOnPhoto,
+    enhanceMode,
+    enhanceInstruction,
+    enhanceIntensity,
+    editorRotation,
+    editorScale,
+    editorStrokeWidth,
+    editorStrokeColor,
+    systemPrompt,
+    temperature,
+    topP,
+    maxNewTokens,
+    inferenceSteps,
+    guidanceScale,
+    negativePrompt,
+    seedInput,
+    showModelParams,
+    viewMode,
+  ]);
 
   useEffect(() => {
     const hasActiveDownload = Object.values(modelStatuses).some(
