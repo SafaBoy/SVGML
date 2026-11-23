@@ -26,6 +26,15 @@ Full-stack AI Scalable Vector Graphics (SVG) generation studio combining **Huggi
 └──────────────────────────────────────┘  └───────────────────────────────┘
 ```
 
+## Studio Navigation & Saved Session
+
+The six-section workspace switcher (Prompt, Photo→SVG, Edit SVG, Canvas, HF Models, Gallery)
+sits in a pinned bar at the top of the studio, directly under the header. Your last-used model,
+active tab and every tuning control are saved per browser in `localStorage` under
+`svgml.session.v1` and restored on the next visit. Uploaded photos, generated SVGs, editor
+history and gallery entries are **not** stored locally. Deleting that key resets the studio to
+its defaults.
+
 ## Ports & Configuration
 
 | Service | Default port | Override |
