@@ -16,3 +16,29 @@ test('session persists the light-canvas preference', () => {
   assert.match(session, /lightCanvas: false,/);
   assert.match(session, /lightCanvas: bool\(false\),/);
 });
+
+const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+
+test('navigation has five items and no Canvas or HF Models tab', () => {
+  assert.match(app, /label: 'Settings'/);
+  assert.match(app, /grid grid-cols-5/);
+  assert.doesNotMatch(app, /id: 'canvas'/);
+  assert.doesNotMatch(app, /label: 'HF Models'/);
+});
+
+test('Prompt owns the session image strip and generation stays in mode', () => {
+  assert.match(app, /Images generated \(this session\)/);
+  assert.match(app, /sessionImages/);
+  assert.doesNotMatch(app, /setMobileSection\('canvas'\)/);
+});
+
+test('Settings owns last run and view preferences; viewer has no inline metadata', () => {
+  assert.match(app, /Last run/);
+  assert.match(app, /View preferences/);
+  assert.doesNotMatch(app, /Backend: <span className="text-emerald-300 font-mono">/);
+});
+
+test('Gallery is its own page and deletion clears the session copy', () => {
+  assert.match(app, /mobileSection === 'gallery'/);
+  assert.match(app, /setSessionImages\(\(prev\) => prev\.filter\(/);
+});

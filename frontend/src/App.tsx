@@ -16,6 +16,7 @@ import {
   Sliders,
   Zap,
   CloudDownload,
+  Settings,
   CheckCircle2,
   PlusCircle,
   Image as ImageIcon,
@@ -111,6 +112,7 @@ export default function App() {
   const [galleryTotal, setGalleryTotal] = useState(0);
   const [galleryHasMore, setGalleryHasMore] = useState(false);
   const [galleryLoading, setGalleryLoading] = useState(false);
+  const [sessionImages, setSessionImages] = useState<GalleryItem[]>([]);
 
   const [viewMode, setViewMode] = useState<'preview' | 'split' | 'code'>(initialSession.viewMode);
   const [mobileSection, setMobileSection] = useState<
@@ -119,6 +121,12 @@ export default function App() {
   const [lightCanvas, setLightCanvas] = useState(initialSession.lightCanvas);
   const [copied, setCopied] = useState(false);
   const [health, setHealth] = useState<any>(null);
+
+  const recordGenerated = (item: GalleryItem) => {
+    setActiveItem(item);
+    setSessionImages((prev) => [item, ...prev.filter((i) => i.id !== item.id)]);
+    setGallery((prev) => [item, ...prev.filter((i) => i.id !== item.id)]);
+  };
 
   useEffect(() => {
     fetchHealth();
@@ -335,9 +343,7 @@ export default function App() {
       if (!res.ok) {
         throw new Error(data.error || 'Photo to SVG conversion failed');
       }
-      setActiveItem(data);
-      setGallery((prev) => [data, ...prev.filter((i) => i.id !== data.id)]);
-      setMobileSection('create');
+      recordGenerated(data);
       fetchHealth();
     } catch (err: any) {
       setError(err.message || 'Failed to convert photo to SVG');
@@ -485,9 +491,7 @@ export default function App() {
       if (!res.ok) {
         throw new Error(data.error || 'Generation failed');
       }
-      setActiveItem(data);
-      setGallery((prev) => [data, ...prev.filter((i) => i.id !== data.id)]);
-      setMobileSection('create');
+      recordGenerated(data);
       fetchModelStatuses();
       fetchHealth();
     } catch (err: any) {
@@ -741,7 +745,7 @@ export default function App() {
       });
       if (!res.ok) throw new Error(`save failed (${res.status})`);
       const saved = await res.json();
-      setGallery((prev) => [saved, ...prev]);
+      recordGenerated(saved);
       setGalleryTotal((prev) => prev + 1);
       setSavedNotice(true);
       setTimeout(() => setSavedNotice(false), 2000);
@@ -757,6 +761,7 @@ export default function App() {
       });
       if (!res.ok) throw new Error(`delete failed (${res.status})`);
       setGallery((prev) => prev.filter((item) => item.id !== id));
+      setSessionImages((prev) => prev.filter((item) => item.id !== id));
       setGalleryTotal((prev) => Math.max(0, prev - 1));
       if (activeItem?.id === id) {
         setActiveItem(null);
@@ -824,6 +829,488 @@ export default function App() {
     setCopied(true);
     setTimeout(() => setCopied(false), 1800);
   };
+
+  const modelHubCard = (
+    <div
+      className="p-4 sm:p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl space-y-3.5"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+          <Search className="w-4 h-4 text-cyan-400 shrink-0" />
+          <span>Hugging Face Model Hub &amp; Downloader</span>
+        </div>
+        <span className="text-[11px] px-2 py-0.5 rounded bg-slate-800 text-slate-400 shrink-0">
+          Source: {hfSearchSource}
+        </span>
+      </div>
+
+      {modelStatusSource === 'native-fallback' && (
+        <p className="text-[11px] px-2.5 py-1.5 rounded-lg bg-amber-950/60 border border-amber-700/60 text-amber-200">
+          ML worker offline — local model cache state is unknown. Model downloads will fail until it
+          is running.
+        </p>
+      )}
+
+      {/* Search Hugging Face Hub */}
+      <form onSubmit={handleSearchHF} className="flex gap-2">
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Search Hugging Face (e.g. svg, fluentui, tiny-sd)..."
+          className="min-h-[44px] flex-1 rounded-xl bg-slate-950 border border-slate-800 px-3 py-2 text-xs sm:text-sm text-slate-100 placeholder-slate-500 focus:border-cyan-500 outline-none"
+        />
+        <button
+          type="submit"
+          disabled={isSearchingHF}
+          className="min-h-[44px] px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 transition shrink-0"
+        >
+          {isSearchingHF ? 'Searching...' : 'Search HF'}
+        </button>
+      </form>
+
+      {/* Custom Hugging Face Repo ID Download Input */}
+      <form onSubmit={handleAddCustomModel} className="flex gap-2">
+        <input
+          type="text"
+          value={customModelId}
+          onChange={(e) => setCustomModelId(e.target.value)}
+          placeholder="Or enter HF repo ID (e.g. Norod78/gpt-fluentui-flat-svg)..."
+          className="min-h-[44px] flex-1 rounded-xl bg-slate-950 border border-slate-800 px-3 py-2 text-xs sm:text-sm text-slate-100 placeholder-slate-500 focus:border-indigo-500 outline-none"
+        />
+        <button
+          type="submit"
+          className="min-h-[44px] px-3.5 py-2 rounded-xl bg-indigo-600/80 hover:bg-indigo-600 text-xs font-medium text-white flex items-center gap-1.5 transition shrink-0"
+        >
+          <PlusCircle className="w-3.5 h-3.5" />
+          Pull HF Repo
+        </button>
+      </form>
+
+      <div className="max-h-80 overflow-y-auto space-y-2.5 pr-1">
+        {models.map((m) => {
+          const isSelected = selectedModel === m.id;
+          const st = modelStatuses[m.id];
+          const isReady = st?.status === 'ready';
+          const isDownloading = st?.status === 'downloading';
+          const isUnsupported = Boolean(m.unsupported_reason);
+
+          return (
+            <div
+              key={m.id}
+              onClick={() => handleSelectModel(m)}
+              title={m.unsupported_reason}
+              className={`p-3.5 rounded-xl border transition ${
+                isUnsupported
+                  ? 'bg-slate-950/60 border-amber-900/70 cursor-not-allowed'
+                  : isSelected
+                    ? 'bg-indigo-950/60 border-indigo-500 cursor-pointer'
+                    : 'bg-slate-950/70 border-slate-800/90 hover:border-slate-700 cursor-pointer'
+              }`}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-slate-100 truncate max-w-[200px] sm:max-w-none">
+                  {m.name}
+                </span>
+                <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-cyan-300">
+                    {m.pipeline}
+                  </span>
+                  {m.verified_svg && m.fits_gpu && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950/90 border border-emerald-700/70 text-emerald-300 font-medium">
+                      Verified SVG · fits GPU
+                    </span>
+                  )}
+                  {isUnsupported && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-950/90 border border-amber-700/70 text-amber-300">
+                      Unsupported
+                    </span>
+                  )}
+                  {isUnsupported ? (
+                    <span className="text-[10px] px-2.5 py-1 rounded-full bg-slate-800 text-slate-400">
+                      Not available
+                    </span>
+                  ) : isReady ? (
+                    <span className="inline-flex items-center gap-1 text-[10px] px-2.5 py-1 rounded-full bg-emerald-950/90 border border-emerald-700/70 text-emerald-300 font-medium">
+                      <CheckCircle2 className="w-3 h-3" />
+                      Downloaded ({st.downloaded_mb} MB)
+                    </span>
+                  ) : isDownloading ? (
+                    <span className="inline-flex items-center gap-1 text-[10px] px-2.5 py-1 rounded-full bg-amber-950/90 border border-amber-700/70 text-amber-300 font-medium">
+                      <RefreshCw className="w-3 h-3 animate-spin" />
+                      {st.progress}% ({st.downloaded_mb || 0}/{st.total_mb || '?'} MB)
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={(e) => handleDownloadModel(m.id, e)}
+                      className="min-h-[32px] inline-flex items-center gap-1 text-[11px] px-3 py-1 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition"
+                      title={`Download ${m.id} weights from Hugging Face Hub`}
+                    >
+                      <CloudDownload className="w-3.5 h-3.5" />
+                      Download HF
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <p className="text-[11px] text-slate-400 mt-1.5 line-clamp-2">
+                {m.description}
+              </p>
+
+              {m.unsupported_reason && (
+                <p className="mt-1.5 text-[10px] text-amber-300/90">
+                  {m.unsupported_reason}
+                </p>
+              )}
+
+              {isDownloading && (
+                <div className="mt-2 space-y-1">
+                  <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-indigo-500 to-cyan-400 transition-all duration-300"
+                      style={{ width: `${Math.max(5, st.progress || 5)}%` }}
+                    />
+                  </div>
+                  <div className="text-[10px] text-amber-300/90 font-mono truncate">
+                    {st.current_file || 'Downloading weights from huggingface.co...'}
+                  </div>
+                </div>
+              )}
+
+              {st?.status === 'error' && (
+                <div className="mt-1.5 text-[10px] text-rose-400">
+                  Download error: {st.error}
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center justify-between gap-1 mt-2 text-[10px] text-slate-500">
+                <span className="font-mono text-slate-400 truncate">{m.id}</span>
+                <span>
+                  {m.framework} • ⬇ {m.downloads.toLocaleString()} • ♥ {m.likes}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+
+  const generationDefaultsCard = (
+    <div className="p-3.5 rounded-xl bg-slate-950/90 border border-indigo-500/30 space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={() => setShowModelParams(!showModelParams)}
+          className="text-xs font-semibold text-indigo-300 flex items-center gap-1.5"
+        >
+          <Sliders className="w-3.5 h-3.5 text-cyan-400" />
+          <span>Model System Prompt &amp; Hyperparameters</span>
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-950 border border-indigo-700/60 text-indigo-200 font-mono">
+            Temp: {temperature.toFixed(2)} • Top-P: {topP.toFixed(2)}
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setSystemPrompt(SYSTEM_PROMPT_PRESETS[0].prompt);
+            setTemperature(0.75);
+            setTopP(0.92);
+            setMaxNewTokens(512);
+            setInferenceSteps(8);
+            setGuidanceScale(7.5);
+            setNegativePrompt('photo, blurry, noisy, grainy, watermark, text, monochrome');
+            setSeedInput('');
+          }}
+          className="text-[11px] text-slate-400 hover:text-slate-200 transition"
+        >
+          Reset Defaults
+        </button>
+      </div>
+
+      {showModelParams && (
+        <div className="space-y-3 pt-1">
+          {/* System Prompt + Quick Templates */}
+          <div className="space-y-1.5">
+            <div className="flex flex-wrap items-center justify-between gap-1">
+              <label className="text-[11px] font-medium text-slate-300">
+                System Prompt (for HF Text-to-SVG LLMs):
+              </label>
+              <span className="text-[10px] text-slate-500 font-mono truncate max-w-[180px]">
+                {selectedModel}
+              </span>
+            </div>
+
+            <div className="flex flex-wrap gap-1.5">
+              {SYSTEM_PROMPT_PRESETS.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  onClick={() => setSystemPrompt(preset.prompt)}
+                  className={`min-h-[28px] px-2 py-1 rounded-lg text-[10px] font-medium border transition ${
+                    systemPrompt === preset.prompt
+                      ? 'bg-indigo-600/30 border-indigo-500 text-indigo-200'
+                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+
+            <textarea
+              rows={2}
+              value={systemPrompt}
+              onChange={(e) => setSystemPrompt(e.target.value)}
+              placeholder="Enter custom system prompt for the Hugging Face model..."
+              className="w-full rounded-xl bg-slate-900 border border-slate-800 focus:border-indigo-500 p-2.5 text-xs text-slate-100 placeholder-slate-500 outline-none font-mono"
+            />
+          </div>
+
+          {/* Sliders Grid: Temperature, Top-P, Max Tokens, Steps, Guidance Scale */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+            <div>
+              <div className="flex justify-between text-slate-400 mb-1">
+                <span>Temperature</span>
+                <span className="font-mono text-indigo-300">{temperature.toFixed(2)}</span>
+              </div>
+              <input
+                type="range"
+                min={0.1}
+                max={1.5}
+                step={0.05}
+                value={temperature}
+                onChange={(e) => setTemperature(Number(e.target.value))}
+                className="w-full h-5 accent-indigo-500"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between text-slate-400 mb-1">
+                <span>Top-P (Nucleus)</span>
+                <span className="font-mono text-indigo-300">{topP.toFixed(2)}</span>
+              </div>
+              <input
+                type="range"
+                min={0.1}
+                max={1.0}
+                step={0.02}
+                value={topP}
+                onChange={(e) => setTopP(Number(e.target.value))}
+                className="w-full h-5 accent-indigo-500"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between text-slate-400 mb-1">
+                <span>Max SVG Tokens</span>
+                <span className="font-mono text-cyan-300">{maxNewTokens}</span>
+              </div>
+              <input
+                type="range"
+                min={128}
+                max={1024}
+                step={32}
+                value={maxNewTokens}
+                onChange={(e) => setMaxNewTokens(Number(e.target.value))}
+                className="w-full h-5 accent-cyan-500"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between text-slate-400 mb-1">
+                <span>Diffusion Steps / CFG</span>
+                <span className="font-mono text-pink-300">
+                  {inferenceSteps} steps • {guidanceScale.toFixed(1)} CFG
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  type="range"
+                  min={1}
+                  max={20}
+                  step={1}
+                  value={inferenceSteps}
+                  onChange={(e) => setInferenceSteps(Number(e.target.value))}
+                  className="w-full h-5 accent-pink-500"
+                  title="Diffusion Inference Steps"
+                />
+                <input
+                  type="range"
+                  min={1.0}
+                  max={14.0}
+                  step={0.5}
+                  value={guidanceScale}
+                  onChange={(e) => setGuidanceScale(Number(e.target.value))}
+                  className="w-full h-5 accent-pink-500"
+                  title="Classifier-Free Guidance Scale"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Negative Prompt & Seed Row */}
+          <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 pt-1">
+            <div className="sm:col-span-7">
+              <label className="text-[10px] text-slate-400 block mb-1">
+                Negative Prompt (Diffusion):
+              </label>
+              <input
+                type="text"
+                value={negativePrompt}
+                onChange={(e) => setNegativePrompt(e.target.value)}
+                placeholder="blurry, noisy, monochrome..."
+                className="min-h-[34px] w-full rounded-lg bg-slate-900 border border-slate-800 px-2.5 py-1 text-[11px] text-slate-200 outline-none focus:border-pink-500"
+              />
+            </div>
+            <div className="sm:col-span-5">
+              <label className="text-[10px] text-slate-400 block mb-1">
+                Seed (empty = auto):
+              </label>
+              <div className="flex gap-1">
+                <input
+                  type="number"
+                  value={seedInput}
+                  onChange={(e) => setSeedInput(e.target.value)}
+                  placeholder="Auto"
+                  className="min-h-[34px] w-full rounded-lg bg-slate-900 border border-slate-800 px-2 py-1 text-[11px] font-mono text-slate-200 outline-none focus:border-cyan-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => setSeedInput(String(Math.floor(Math.random() * 999999)))}
+                  className="min-h-[34px] px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-[10px] text-cyan-300 shrink-0"
+                  title="Generate Random Seed"
+                >
+                  Rand
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  const galleryCard = (
+    <div
+      className="p-4 sm:p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl space-y-3"
+    >
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-slate-200">
+          Recent Colored SVGs ({gallery.length}
+          {galleryTotal > gallery.length ? ` of ${galleryTotal}` : ''})
+        </h3>
+        <span className="text-xs text-slate-500">Tap to inspect or download</span>
+      </div>
+
+      {gallery.length === 0 ? (
+        <p className="text-xs text-slate-500 py-4 text-center">
+          Generated SVGs will appear here automatically.
+        </p>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+          {gallery.map((item) => (
+            <div
+              key={item.id}
+              onClick={() => {
+                setActiveItem(item);
+                setMobileSection('create');
+              }}
+              className={`group relative rounded-xl border p-2.5 cursor-pointer transition flex flex-col gap-2 ${
+                activeItem?.id === item.id
+                  ? 'bg-indigo-950/40 border-indigo-500'
+                  : 'bg-slate-950/60 border-slate-800 hover:border-slate-700'
+              }`}
+            >
+              <div
+                className="w-full aspect-square rounded-lg checkerboard-dark p-2 flex items-center justify-center overflow-hidden [&>svg]:w-full [&>svg]:h-full"
+                dangerouslySetInnerHTML={{ __html: item.svg }}
+              />
+              <div className="text-[11px] text-slate-300 truncate font-medium">
+                {item.prompt}
+              </div>
+              <div className="flex items-center justify-between text-[10px] text-slate-500">
+                <span className="truncate max-w-[90px]" title={item.backend_used}>
+                  {item.device?.toUpperCase() || 'GPU'}
+                </span>
+                <span>{item.total_ms}ms</span>
+              </div>
+
+              {/* Touch-Friendly Always-Visible Action Row on Each Gallery Card */}
+              <div className="flex items-center gap-1 pt-1 border-t border-slate-800/80 min-w-0">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    downloadSvgItem(item);
+                  }}
+                  className="min-h-[34px] flex-1 min-w-0 px-1.5 py-1 rounded-lg bg-emerald-600/90 hover:bg-emerald-500 text-white text-[10px] font-medium flex items-center justify-center gap-1 transition truncate"
+                  title="Download this SVG"
+                >
+                  <Download className="w-3 h-3 shrink-0" />
+                  <span className="truncate">Save</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setActiveItem(item);
+                    setSvgHistory([item.svg]);
+                    setHistoryIndex(0);
+                    setStudioMode('editor');
+                    setMobileSection('editor');
+                  }}
+                  className="min-h-[34px] px-2 py-1 rounded-lg bg-cyan-600/80 hover:bg-cyan-500 text-white text-[10px] font-medium flex items-center justify-center gap-1 transition shrink-0"
+                  title="Edit & AI Enhance this SVG"
+                >
+                  <SlidersHorizontal className="w-3 h-3 shrink-0" />
+                  <span>Edit</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDeleteGalleryItem(item.id);
+                  }}
+                  className="min-h-[34px] px-1.5 py-1 rounded-lg bg-slate-900 hover:bg-rose-950 text-rose-400 border border-slate-800 transition flex items-center justify-center shrink-0"
+                  title="Delete"
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {galleryHasMore && (
+        <button
+          type="button"
+          onClick={loadMoreGallery}
+          disabled={galleryLoading}
+          className="w-full min-h-[38px] rounded-xl border border-slate-700 bg-slate-950/60 hover:border-slate-600 disabled:opacity-60 text-xs font-medium text-slate-300 transition"
+        >
+          {galleryLoading ? 'Loading…' : `Load older SVGs (${galleryTotal - gallery.length} more)`}
+        </button>
+      )}
+    </div>
+  );
+
+  const lastRunFields: [string, string][] = activeItem
+    ? [
+        ['Model', activeItem.model_id],
+        ['Backend', activeItem.backend_used],
+        ['Device', activeItem.device],
+        ['Pipeline', activeItem.pipeline],
+        ['Elements', String(activeItem.path_count)],
+        ['Size', `${(activeItem.byte_size / 1024).toFixed(1)} KB`],
+        ['ML inference', `${activeItem.inference_ms} ms`],
+        ['Rust processing', `${activeItem.rust_process_ms} ms`],
+        ['Total time', `${activeItem.total_ms} ms`],
+        ['Created', activeItem.created_at || '—'],
+      ]
+    : [];
 
   const activeModelStatus = modelStatuses[selectedModel];
   const mlFallback = health?.ml_worker?.fallback === true;
@@ -897,7 +1384,7 @@ export default function App() {
 
       {/* Workspace & Page Navigation Bar (Desktop & Mobile) */}
       <nav className="inset-x-0 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 px-1.5 py-1.5 shadow-2xl">
-        <div className="grid grid-cols-6 gap-1 max-w-3xl mx-auto">
+        <div className="grid grid-cols-5 gap-1 max-w-3xl mx-auto">
           {[
             {
               id: 'create',
@@ -927,15 +1414,9 @@ export default function App() {
               },
             },
             {
-              id: 'canvas',
-              label: 'Canvas',
-              icon: Download,
-              onClick: () => setMobileSection('create'),
-            },
-            {
-              id: 'models',
-              label: 'HF Models',
-              icon: CloudDownload,
+              id: 'settings',
+              label: 'Settings',
+              icon: Settings,
               onClick: () => setMobileSection('settings'),
             },
             {
@@ -946,9 +1427,7 @@ export default function App() {
             },
           ].map((item) => {
             const Icon = item.icon;
-            const active =
-              mobileSection === item.id ||
-              (item.id === 'editor' && studioMode === 'editor' && mobileSection !== 'settings');
+            const active = mobileSection === item.id;
             return (
               <button
                 key={item.id}
@@ -970,24 +1449,115 @@ export default function App() {
       </div>
 
       {/* Main Content Grid — Mobile-First Tabbed / Stacked + Desktop 12-Col */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 py-4 sm:py-6 grid grid-cols-1 lg:grid-cols-12 gap-5">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 py-4 sm:py-6">
+        {mobileSection === 'settings' ? (
+          <div className="w-full grid grid-cols-1 xl:grid-cols-2 gap-5 items-start">
+            <div className="space-y-5">
+              {modelHubCard}
+              <div className="p-4 sm:p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl space-y-3">
+                <h2 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+                  <Sliders className="w-4 h-4 text-cyan-400" /> Generation defaults
+                </h2>
+                {generationDefaultsCard}
+              </div>
+            </div>
+            <div className="space-y-5">
+              <div className="p-4 sm:p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <h2 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+                    <Activity className="w-4 h-4 text-amber-400" /> Last run
+                  </h2>
+                  {activeItem && (
+                    <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-400 font-mono">
+                      {activeItem.created_at ? new Date(activeItem.created_at).toLocaleString() : '—'}
+                    </span>
+                  )}
+                </div>
+                {activeItem ? (
+                  <>
+                    <dl className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                      {lastRunFields.map(([label, value]) => (
+                        <div
+                          key={label}
+                          className="rounded-lg bg-slate-950/70 border border-slate-800/80 px-2.5 py-1.5 min-w-0"
+                        >
+                          <dt className="text-[10px] uppercase tracking-wide text-slate-500">
+                            {label}
+                          </dt>
+                          <dd className="text-slate-200 truncate" title={value}>
+                            {value}
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                    {(activeItem.warning || activeItem.fallback_used) && (
+                      <p
+                        role="status"
+                        className="rounded-lg border border-amber-700/70 bg-amber-950/60 px-3 py-2 text-[11px] text-amber-200"
+                      >
+                        {activeItem.warning || 'No warning recorded.'}
+                        {activeItem.fallback_used
+                          ? ' Output came from a built-in fallback, not the selected model.'
+                          : ''}
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-xs text-slate-500">
+                    Generate an SVG to see the model, backend, device and timings for the last run.
+                  </p>
+                )}
+              </div>
+              <div className="p-4 sm:p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl space-y-3">
+                <h2 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+                  <Eye className="w-4 h-4 text-indigo-400" /> View preferences
+                </h2>
+                <p className="text-[11px] text-slate-500">
+                  Choose how generated SVGs are displayed in the viewer.
+                </p>
+                <div className="inline-flex rounded-xl bg-slate-950 p-1 border border-slate-800">
+                  {[
+                    { id: 'preview', label: 'Canvas', icon: Eye },
+                    { id: 'split', label: 'Split', icon: Layers },
+                    { id: 'code', label: 'SVG XML', icon: Code2 },
+                  ].map((tab) => {
+                    const Icon = tab.icon;
+                    return (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setViewMode(tab.id as any)}
+                        className={`min-h-[36px] px-2.5 py-1 rounded-lg text-xs flex items-center gap-1.5 transition ${
+                          viewMode === tab.id
+                            ? 'bg-indigo-600 text-white'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <Icon className="w-3.5 h-3.5" />
+                        {tab.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setLightCanvas(!lightCanvas)}
+                  className="min-h-[38px] px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs text-slate-300"
+                >
+                  {lightCanvas ? 'Dark Grid' : 'Light Grid'}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : mobileSection === 'gallery' ? (
+          <div className="w-full">{galleryCard}</div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 w-full">
+
         {/* Left Control Column */}
-        <section
-          className={`lg:col-span-5 space-y-5 ${
-            mobileSection === 'create' ||
-            mobileSection === 'photo' ||
-            mobileSection === 'editor' ||
-            mobileSection === 'settings'
-              ? 'block'
-              : 'hidden lg:block'
-          }`}
-        >
+        <section className="lg:col-span-5 space-y-5">
           {/* Creation & Editing Studio Card (Text-to-SVG, Photo-to-LineArt & SVG Editor Switcher) */}
-          <div
-            className={`p-4 sm:p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl space-y-4 ${
-              mobileSection === 'settings' ? 'hidden lg:block' : 'block'
-            }`}
-          >
+          <div className="p-4 sm:p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl space-y-4">
             {/* Studio Mode Switcher Tabs (3 Modes) */}
             <div className="grid grid-cols-3 gap-1.5 p-1 rounded-xl bg-slate-950 border border-slate-800">
               <button
@@ -1044,9 +1614,6 @@ export default function App() {
                     <Sparkles className="w-4 h-4 text-indigo-400" />
                     Vector Prompt
                   </label>
-                  <span className="text-xs text-slate-400 truncate max-w-full">
-                    Model: <span className="text-indigo-300 font-mono">{selectedModel}</span>
-                  </span>
                 </div>
 
                 <textarea
@@ -1099,6 +1666,51 @@ export default function App() {
                       </button>
                     ))}
                   </div>
+                </div>
+
+                {/* Session-only generated images */}
+                <div className="space-y-2 pt-2 border-t border-slate-800/80">
+                  <div className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                    <Grid className="w-3.5 h-3.5 text-cyan-400" />
+                    Images generated (this session)
+                  </div>
+                  {sessionImages.length === 0 ? (
+                    <p className="text-[11px] text-slate-500">
+                      Generated SVGs will appear here for this session.
+                    </p>
+                  ) : (
+                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 max-h-56 overflow-y-auto pr-1">
+                      {sessionImages.map((item) => (
+                        <div
+                          key={item.id}
+                          className="rounded-lg border border-slate-800 bg-slate-950/60 p-1.5 space-y-1"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => setActiveItem(item)}
+                            title={item.prompt}
+                            className="w-full h-16 flex items-center justify-center rounded bg-[repeating-linear-gradient(45deg,#0f172a,#0f172a_6px,#1e293b_6px,#1e293b_12px)]"
+                          >
+                            <div
+                              className="w-full h-full [&>svg]:w-full [&>svg]:h-full"
+                              dangerouslySetInnerHTML={{ __html: item.svg }}
+                            />
+                          </button>
+                          <p className="text-[10px] text-slate-400 truncate">{item.prompt}</p>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              downloadSvgItem(item);
+                            }}
+                            className="w-full text-[10px] px-1.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center justify-center gap-1"
+                          >
+                            <Download className="w-3 h-3" /> Save
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </>
             ) : studioMode === 'photo' ? (
@@ -1689,437 +2301,17 @@ export default function App() {
             )}
           </div>
 
-          {/* Hugging Face Model Search, Download & Manager */}
-          <div
-            className={`p-4 sm:p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl space-y-3.5 ${
-              mobileSection === 'create' || mobileSection === 'photo' || mobileSection === 'editor'
-                ? 'hidden lg:block'
-                : 'block'
-            }`}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <div className="text-sm font-semibold text-slate-200 flex items-center gap-2">
-                <Search className="w-4 h-4 text-cyan-400 shrink-0" />
-                <span>Hugging Face Model Hub &amp; Downloader</span>
-              </div>
-              <span className="text-[11px] px-2 py-0.5 rounded bg-slate-800 text-slate-400 shrink-0">
-                Source: {hfSearchSource}
-              </span>
-            </div>
-
-            {modelStatusSource === 'native-fallback' && (
-              <p className="text-[11px] px-2.5 py-1.5 rounded-lg bg-amber-950/60 border border-amber-700/60 text-amber-200">
-                ML worker offline — local model cache state is unknown. Model downloads will fail until it
-                is running.
-              </p>
-            )}
-
-            {/* Search Hugging Face Hub */}
-            <form onSubmit={handleSearchHF} className="flex gap-2">
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search Hugging Face (e.g. svg, fluentui, tiny-sd)..."
-                className="min-h-[44px] flex-1 rounded-xl bg-slate-950 border border-slate-800 px-3 py-2 text-xs sm:text-sm text-slate-100 placeholder-slate-500 focus:border-cyan-500 outline-none"
-              />
-              <button
-                type="submit"
-                disabled={isSearchingHF}
-                className="min-h-[44px] px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 transition shrink-0"
-              >
-                {isSearchingHF ? 'Searching...' : 'Search HF'}
-              </button>
-            </form>
-
-            {/* Custom Hugging Face Repo ID Download Input */}
-            <form onSubmit={handleAddCustomModel} className="flex gap-2">
-              <input
-                type="text"
-                value={customModelId}
-                onChange={(e) => setCustomModelId(e.target.value)}
-                placeholder="Or enter HF repo ID (e.g. Norod78/gpt-fluentui-flat-svg)..."
-                className="min-h-[44px] flex-1 rounded-xl bg-slate-950 border border-slate-800 px-3 py-2 text-xs sm:text-sm text-slate-100 placeholder-slate-500 focus:border-indigo-500 outline-none"
-              />
-              <button
-                type="submit"
-                className="min-h-[44px] px-3.5 py-2 rounded-xl bg-indigo-600/80 hover:bg-indigo-600 text-xs font-medium text-white flex items-center gap-1.5 transition shrink-0"
-              >
-                <PlusCircle className="w-3.5 h-3.5" />
-                Pull HF Repo
-              </button>
-            </form>
-
-            {/* HF Model System Prompt & Inference Hyperparameters Panel */}
-            <div className="p-3.5 rounded-xl bg-slate-950/90 border border-indigo-500/30 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowModelParams(!showModelParams)}
-                  className="text-xs font-semibold text-indigo-300 flex items-center gap-1.5"
-                >
-                  <Sliders className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>Model System Prompt &amp; Hyperparameters</span>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-950 border border-indigo-700/60 text-indigo-200 font-mono">
-                    Temp: {temperature.toFixed(2)} • Top-P: {topP.toFixed(2)}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSystemPrompt(SYSTEM_PROMPT_PRESETS[0].prompt);
-                    setTemperature(0.75);
-                    setTopP(0.92);
-                    setMaxNewTokens(512);
-                    setInferenceSteps(8);
-                    setGuidanceScale(7.5);
-                    setNegativePrompt('photo, blurry, noisy, grainy, watermark, text, monochrome');
-                    setSeedInput('');
-                  }}
-                  className="text-[11px] text-slate-400 hover:text-slate-200 transition"
-                >
-                  Reset Defaults
-                </button>
-              </div>
-
-              {showModelParams && (
-                <div className="space-y-3 pt-1">
-                  {/* System Prompt + Quick Templates */}
-                  <div className="space-y-1.5">
-                    <div className="flex flex-wrap items-center justify-between gap-1">
-                      <label className="text-[11px] font-medium text-slate-300">
-                        System Prompt (for HF Text-to-SVG LLMs):
-                      </label>
-                      <span className="text-[10px] text-slate-500 font-mono truncate max-w-[180px]">
-                        {selectedModel}
-                      </span>
-                    </div>
-
-                    <div className="flex flex-wrap gap-1.5">
-                      {SYSTEM_PROMPT_PRESETS.map((preset) => (
-                        <button
-                          key={preset.id}
-                          type="button"
-                          onClick={() => setSystemPrompt(preset.prompt)}
-                          className={`min-h-[28px] px-2 py-1 rounded-lg text-[10px] font-medium border transition ${
-                            systemPrompt === preset.prompt
-                              ? 'bg-indigo-600/30 border-indigo-500 text-indigo-200'
-                              : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
-                          }`}
-                        >
-                          {preset.label}
-                        </button>
-                      ))}
-                    </div>
-
-                    <textarea
-                      rows={2}
-                      value={systemPrompt}
-                      onChange={(e) => setSystemPrompt(e.target.value)}
-                      placeholder="Enter custom system prompt for the Hugging Face model..."
-                      className="w-full rounded-xl bg-slate-900 border border-slate-800 focus:border-indigo-500 p-2.5 text-xs text-slate-100 placeholder-slate-500 outline-none font-mono"
-                    />
-                  </div>
-
-                  {/* Sliders Grid: Temperature, Top-P, Max Tokens, Steps, Guidance Scale */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                    <div>
-                      <div className="flex justify-between text-slate-400 mb-1">
-                        <span>Temperature</span>
-                        <span className="font-mono text-indigo-300">{temperature.toFixed(2)}</span>
-                      </div>
-                      <input
-                        type="range"
-                        min={0.1}
-                        max={1.5}
-                        step={0.05}
-                        value={temperature}
-                        onChange={(e) => setTemperature(Number(e.target.value))}
-                        className="w-full h-5 accent-indigo-500"
-                      />
-                    </div>
-
-                    <div>
-                      <div className="flex justify-between text-slate-400 mb-1">
-                        <span>Top-P (Nucleus)</span>
-                        <span className="font-mono text-indigo-300">{topP.toFixed(2)}</span>
-                      </div>
-                      <input
-                        type="range"
-                        min={0.1}
-                        max={1.0}
-                        step={0.02}
-                        value={topP}
-                        onChange={(e) => setTopP(Number(e.target.value))}
-                        className="w-full h-5 accent-indigo-500"
-                      />
-                    </div>
-
-                    <div>
-                      <div className="flex justify-between text-slate-400 mb-1">
-                        <span>Max SVG Tokens</span>
-                        <span className="font-mono text-cyan-300">{maxNewTokens}</span>
-                      </div>
-                      <input
-                        type="range"
-                        min={128}
-                        max={1024}
-                        step={32}
-                        value={maxNewTokens}
-                        onChange={(e) => setMaxNewTokens(Number(e.target.value))}
-                        className="w-full h-5 accent-cyan-500"
-                      />
-                    </div>
-
-                    <div>
-                      <div className="flex justify-between text-slate-400 mb-1">
-                        <span>Diffusion Steps / CFG</span>
-                        <span className="font-mono text-pink-300">
-                          {inferenceSteps} steps • {guidanceScale.toFixed(1)} CFG
-                        </span>
-                      </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <input
-                          type="range"
-                          min={1}
-                          max={20}
-                          step={1}
-                          value={inferenceSteps}
-                          onChange={(e) => setInferenceSteps(Number(e.target.value))}
-                          className="w-full h-5 accent-pink-500"
-                          title="Diffusion Inference Steps"
-                        />
-                        <input
-                          type="range"
-                          min={1.0}
-                          max={14.0}
-                          step={0.5}
-                          value={guidanceScale}
-                          onChange={(e) => setGuidanceScale(Number(e.target.value))}
-                          className="w-full h-5 accent-pink-500"
-                          title="Classifier-Free Guidance Scale"
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Negative Prompt & Seed Row */}
-                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 pt-1">
-                    <div className="sm:col-span-7">
-                      <label className="text-[10px] text-slate-400 block mb-1">
-                        Negative Prompt (Diffusion):
-                      </label>
-                      <input
-                        type="text"
-                        value={negativePrompt}
-                        onChange={(e) => setNegativePrompt(e.target.value)}
-                        placeholder="blurry, noisy, monochrome..."
-                        className="min-h-[34px] w-full rounded-lg bg-slate-900 border border-slate-800 px-2.5 py-1 text-[11px] text-slate-200 outline-none focus:border-pink-500"
-                      />
-                    </div>
-                    <div className="sm:col-span-5">
-                      <label className="text-[10px] text-slate-400 block mb-1">
-                        Seed (empty = auto):
-                      </label>
-                      <div className="flex gap-1">
-                        <input
-                          type="number"
-                          value={seedInput}
-                          onChange={(e) => setSeedInput(e.target.value)}
-                          placeholder="Auto"
-                          className="min-h-[34px] w-full rounded-lg bg-slate-900 border border-slate-800 px-2 py-1 text-[11px] font-mono text-slate-200 outline-none focus:border-cyan-500"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setSeedInput(String(Math.floor(Math.random() * 999999)))}
-                          className="min-h-[34px] px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-[10px] text-cyan-300 shrink-0"
-                          title="Generate Random Seed"
-                        >
-                          Rand
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="max-h-80 overflow-y-auto space-y-2.5 pr-1">
-              {models.map((m) => {
-                const isSelected = selectedModel === m.id;
-                const st = modelStatuses[m.id];
-                const isReady = st?.status === 'ready';
-                const isDownloading = st?.status === 'downloading';
-                const isUnsupported = Boolean(m.unsupported_reason);
-
-                return (
-                  <div
-                    key={m.id}
-                    onClick={() => handleSelectModel(m)}
-                    title={m.unsupported_reason}
-                    className={`p-3.5 rounded-xl border transition ${
-                      isUnsupported
-                        ? 'bg-slate-950/60 border-amber-900/70 cursor-not-allowed'
-                        : isSelected
-                          ? 'bg-indigo-950/60 border-indigo-500 cursor-pointer'
-                          : 'bg-slate-950/70 border-slate-800/90 hover:border-slate-700 cursor-pointer'
-                    }`}
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-xs font-semibold text-slate-100 truncate max-w-[200px] sm:max-w-none">
-                        {m.name}
-                      </span>
-                      <div className="flex flex-wrap items-center gap-1.5 shrink-0">
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-cyan-300">
-                          {m.pipeline}
-                        </span>
-                        {m.verified_svg && m.fits_gpu && (
-                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950/90 border border-emerald-700/70 text-emerald-300 font-medium">
-                            Verified SVG · fits GPU
-                          </span>
-                        )}
-                        {isUnsupported && (
-                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-950/90 border border-amber-700/70 text-amber-300">
-                            Unsupported
-                          </span>
-                        )}
-                        {isUnsupported ? (
-                          <span className="text-[10px] px-2.5 py-1 rounded-full bg-slate-800 text-slate-400">
-                            Not available
-                          </span>
-                        ) : isReady ? (
-                          <span className="inline-flex items-center gap-1 text-[10px] px-2.5 py-1 rounded-full bg-emerald-950/90 border border-emerald-700/70 text-emerald-300 font-medium">
-                            <CheckCircle2 className="w-3 h-3" />
-                            Downloaded ({st.downloaded_mb} MB)
-                          </span>
-                        ) : isDownloading ? (
-                          <span className="inline-flex items-center gap-1 text-[10px] px-2.5 py-1 rounded-full bg-amber-950/90 border border-amber-700/70 text-amber-300 font-medium">
-                            <RefreshCw className="w-3 h-3 animate-spin" />
-                            {st.progress}% ({st.downloaded_mb || 0}/{st.total_mb || '?'} MB)
-                          </span>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={(e) => handleDownloadModel(m.id, e)}
-                            className="min-h-[32px] inline-flex items-center gap-1 text-[11px] px-3 py-1 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition"
-                            title={`Download ${m.id} weights from Hugging Face Hub`}
-                          >
-                            <CloudDownload className="w-3.5 h-3.5" />
-                            Download HF
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    <p className="text-[11px] text-slate-400 mt-1.5 line-clamp-2">
-                      {m.description}
-                    </p>
-
-                    {m.unsupported_reason && (
-                      <p className="mt-1.5 text-[10px] text-amber-300/90">
-                        {m.unsupported_reason}
-                      </p>
-                    )}
-
-                    {isDownloading && (
-                      <div className="mt-2 space-y-1">
-                        <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-gradient-to-r from-indigo-500 to-cyan-400 transition-all duration-300"
-                            style={{ width: `${Math.max(5, st.progress || 5)}%` }}
-                          />
-                        </div>
-                        <div className="text-[10px] text-amber-300/90 font-mono truncate">
-                          {st.current_file || 'Downloading weights from huggingface.co...'}
-                        </div>
-                      </div>
-                    )}
-
-                    {st?.status === 'error' && (
-                      <div className="mt-1.5 text-[10px] text-rose-400">
-                        Download error: {st.error}
-                      </div>
-                    )}
-
-                    <div className="flex flex-wrap items-center justify-between gap-1 mt-2 text-[10px] text-slate-500">
-                      <span className="font-mono text-slate-400 truncate">{m.id}</span>
-                      <span>
-                        {m.framework} • ⬇ {m.downloads.toLocaleString()} • ♥ {m.likes}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
         </section>
 
         {/* Right Canvas & Inspector Column */}
-        <section
-          className={`lg:col-span-7 flex flex-col gap-5 ${
-            mobileSection === 'create' ||
-            mobileSection === 'gallery' ||
-            mobileSection === 'photo' ||
-            mobileSection === 'editor'
-              ? 'block'
-              : 'hidden lg:flex'
-          }`}
-        >
+        <section className="lg:col-span-7 flex flex-col gap-5">
           {/* Interactive SVG Studio Viewer */}
-          <div
-            className={`p-4 sm:p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl flex-1 flex flex-col gap-4 ${
-              mobileSection === 'gallery' ? 'hidden lg:flex' : 'flex'
-            }`}
-          >
+          <div className="p-4 sm:p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl flex-1 flex flex-col gap-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="min-w-0">
                 <h2 className="text-sm font-semibold text-slate-200">
                   Vector Canvas &amp; Live Color Inspector
                 </h2>
-                {activeItem && (
-                  <p className="text-xs text-slate-400 mt-0.5 break-words">
-                    Backend: <span className="text-emerald-300 font-mono">{activeItem.backend_used}</span> •{' '}
-                    Device: <span className="text-cyan-300 font-mono">{activeItem.device}</span> •{' '}
-                    {activeItem.path_count} elements • {(activeItem.byte_size / 1024).toFixed(1)} KB •{' '}
-                    ML: {activeItem.inference_ms}ms / Rust: {activeItem.rust_process_ms}ms
-                  </p>
-                )}
-              </div>
-
-              {/* View Mode Switcher */}
-              <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
-                <div className="inline-flex rounded-xl bg-slate-950 p-1 border border-slate-800">
-                  {[
-                    { id: 'preview', label: 'Canvas', icon: Eye },
-                    { id: 'split', label: 'Split', icon: Layers },
-                    { id: 'code', label: 'SVG XML', icon: Code2 },
-                  ].map((tab) => {
-                    const Icon = tab.icon;
-                    return (
-                      <button
-                        key={tab.id}
-                        type="button"
-                        onClick={() => setViewMode(tab.id as any)}
-                        className={`min-h-[36px] px-2.5 py-1 rounded-lg text-xs flex items-center gap-1.5 transition ${
-                          viewMode === tab.id
-                            ? 'bg-indigo-600 text-white'
-                            : 'text-slate-400 hover:text-slate-200'
-                        }`}
-                      >
-                        <Icon className="w-3.5 h-3.5" />
-                        {tab.label}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => setLightCanvas(!lightCanvas)}
-                  className="min-h-[38px] px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs text-slate-300"
-                >
-                  {lightCanvas ? 'Dark Grid' : 'Light Grid'}
-                </button>
               </div>
             </div>
 
@@ -2240,114 +2432,9 @@ export default function App() {
             )}
           </div>
 
-          {/* Generation History Gallery with Direct Download Buttons on Every Card */}
-          <div
-            className={`p-4 sm:p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl space-y-3 ${
-              mobileSection === 'create' ? 'hidden lg:block' : 'block'
-            }`}
-          >
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-slate-200">
-                Recent Colored SVGs ({gallery.length}
-                {galleryTotal > gallery.length ? ` of ${galleryTotal}` : ''})
-              </h3>
-              <span className="text-xs text-slate-500">Tap to inspect or download</span>
-            </div>
-
-            {gallery.length === 0 ? (
-              <p className="text-xs text-slate-500 py-4 text-center">
-                Generated SVGs will appear here automatically.
-              </p>
-            ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                {gallery.map((item) => (
-                  <div
-                    key={item.id}
-                    onClick={() => {
-                      setActiveItem(item);
-                      if (window.innerWidth < 1024) {
-                        setMobileSection('create');
-                      }
-                    }}
-                    className={`group relative rounded-xl border p-2.5 cursor-pointer transition flex flex-col gap-2 ${
-                      activeItem?.id === item.id
-                        ? 'bg-indigo-950/40 border-indigo-500'
-                        : 'bg-slate-950/60 border-slate-800 hover:border-slate-700'
-                    }`}
-                  >
-                    <div
-                      className="w-full aspect-square rounded-lg checkerboard-dark p-2 flex items-center justify-center overflow-hidden [&>svg]:w-full [&>svg]:h-full"
-                      dangerouslySetInnerHTML={{ __html: item.svg }}
-                    />
-                    <div className="text-[11px] text-slate-300 truncate font-medium">
-                      {item.prompt}
-                    </div>
-                    <div className="flex items-center justify-between text-[10px] text-slate-500">
-                      <span className="truncate max-w-[90px]" title={item.backend_used}>
-                        {item.device?.toUpperCase() || 'GPU'}
-                      </span>
-                      <span>{item.total_ms}ms</span>
-                    </div>
-
-                    {/* Touch-Friendly Always-Visible Action Row on Each Gallery Card */}
-                    <div className="flex items-center gap-1 pt-1 border-t border-slate-800/80 min-w-0">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          downloadSvgItem(item);
-                        }}
-                        className="min-h-[34px] flex-1 min-w-0 px-1.5 py-1 rounded-lg bg-emerald-600/90 hover:bg-emerald-500 text-white text-[10px] font-medium flex items-center justify-center gap-1 transition truncate"
-                        title="Download this SVG"
-                      >
-                        <Download className="w-3 h-3 shrink-0" />
-                        <span className="truncate">Save</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setActiveItem(item);
-                          setSvgHistory([item.svg]);
-                          setHistoryIndex(0);
-                          setStudioMode('editor');
-                          setMobileSection('editor');
-                        }}
-                        className="min-h-[34px] px-2 py-1 rounded-lg bg-cyan-600/80 hover:bg-cyan-500 text-white text-[10px] font-medium flex items-center justify-center gap-1 transition shrink-0"
-                        title="Edit & AI Enhance this SVG"
-                      >
-                        <SlidersHorizontal className="w-3 h-3 shrink-0" />
-                        <span>Edit</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDeleteGalleryItem(item.id);
-                        }}
-                        className="min-h-[34px] px-1.5 py-1 rounded-lg bg-slate-900 hover:bg-rose-950 text-rose-400 border border-slate-800 transition flex items-center justify-center shrink-0"
-                        title="Delete"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {galleryHasMore && (
-              <button
-                type="button"
-                onClick={loadMoreGallery}
-                disabled={galleryLoading}
-                className="w-full min-h-[38px] rounded-xl border border-slate-700 bg-slate-950/60 hover:border-slate-600 disabled:opacity-60 text-xs font-medium text-slate-300 transition"
-              >
-                {galleryLoading ? 'Loading…' : `Load older SVGs (${galleryTotal - gallery.length} more)`}
-              </button>
-            )}
-          </div>
         </section>
+          </div>
+        )}
       </main>
 
     </div>
