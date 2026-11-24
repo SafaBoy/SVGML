@@ -14,6 +14,7 @@ export interface SessionState {
   style: string;
   customPalette: string[];
   selectedModel: string;
+  ollamaEnabled: boolean;
   pipeline: Pipeline;
   colorPrecision: number;
   filterSpeckle: number;
@@ -49,6 +50,7 @@ export const DEFAULT_SESSION: SessionState = {
   style: 'vibrant-gradient',
   customPalette: STYLE_PRESETS[0].colors,
   selectedModel: 'Norod78/gpt-fluentui-flat-svg',
+  ollamaEnabled: true,
   pipeline: 'direct-svg',
   colorPrecision: 6,
   filterSpeckle: 4,
@@ -118,6 +120,7 @@ const validators: { [K in keyof SessionState]: (value: unknown) => SessionState[
   style: str(DEFAULT_SESSION.style),
   customPalette: strArray(DEFAULT_SESSION.customPalette),
   selectedModel: str(DEFAULT_SESSION.selectedModel),
+  ollamaEnabled: bool(true),
   pipeline: oneOf<Pipeline>(
     ['direct-svg', 'diffusion-vtracer', 'neural-vtracer'],
     'direct-svg'

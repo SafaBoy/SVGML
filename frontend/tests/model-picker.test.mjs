@@ -31,6 +31,14 @@ test('pipeline selector is hidden behind an advanced disclosure on all three pag
   assert.equal((app.match(/\{pipelineDisclosure\}/g) || []).length, 3);
 });
 
+test('model picker surfaces the active engine and model source', () => {
+  const pickerStart = app.indexOf('const modelPicker = (');
+  const pickerEnd = app.indexOf('const pipelineDisclosure', pickerStart);
+  const picker = app.slice(pickerStart, pickerEnd);
+  assert.match(picker, /Engine: \{selectedEngine\}/);
+  assert.match(picker, /m\.source/);
+});
+
 test('photo and edit requests send the selected model and pipeline', () => {
   const photoStart = app.indexOf('const handleConvertPhotoToSvg');
   const photoEnd = app.indexOf('const handleDownloadModel', photoStart);

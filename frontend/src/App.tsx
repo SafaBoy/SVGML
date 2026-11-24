@@ -45,7 +45,7 @@ import {
 import { API_BASE, API_TOKEN, GALLERY_PAGE_SIZE, apiFetch } from './api';
 import { createSamplePhotoDataUrl } from './samplePhoto';
 import type { CuratedModel, ModelStatus, GalleryItem } from './types';
-import { loadSession, saveSession, type SessionState } from './session';
+import { DEFAULT_SESSION, loadSession, saveSession, type SessionState } from './session';
 
 const PIPELINE_MODES = [
   { id: 'direct-svg', title: 'Direct SVG LLM', sub: 'PyTorch + Rust XML' },
@@ -68,6 +68,7 @@ export default function App() {
   const [style, setStyle] = useState(initialSession.style);
   const [customPalette, setCustomPalette] = useState<string[]>(initialSession.customPalette);
   const [selectedModel, setSelectedModel] = useState<string>(initialSession.selectedModel);
+  const [ollamaEnabled, setOllamaEnabled] = useState<boolean>(initialSession.ollamaEnabled);
   const [pipeline, setPipeline] = useState<'direct-svg' | 'diffusion-vtracer' | 'neural-vtracer'>(initialSession.pipeline);
   const [colorPrecision, setColorPrecision] = useState<number>(initialSession.colorPrecision);
   const [filterSpeckle, setFilterSpeckle] = useState<number>(initialSession.filterSpeckle);
@@ -118,6 +119,12 @@ export default function App() {
   const [models, setModels] = useState<CuratedModel[]>([]);
   const [modelStatuses, setModelStatuses] = useState<Record<string, ModelStatus>>({});
   const [modelStatusSource, setModelStatusSource] = useState<string>('ml-worker');
+  const [ollamaStatus, setOllamaStatus] = useState<{
+    enabled: boolean;
+    base_url: string;
+    reachable: boolean;
+    model_count: number;
+  } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [customModelId, setCustomModelId] = useState('');
   const [isSearchingHF, setIsSearchingHF] = useState(false);
@@ -144,6 +151,7 @@ export default function App() {
 
   // Derived from the selected model; neither value is persisted as a new session key.
   const modelPipeline = models.find((m) => m.id === selectedModel)?.pipeline;
+  const selectedEngine = models.find((m) => m.id === selectedModel)?.source === 'ollama' ? 'ollama' : 'hf';
   const manualPipelineOverride = pipeline !== modelPipeline;
 
   // The Prompt tab is a JSX branch, so ranking is computed at component scope.
@@ -159,6 +167,7 @@ export default function App() {
     fetchHealth();
     fetchCuratedModels();
     fetchModelStatuses();
+    fetchEngineStatus();
     fetchGallery();
     // Initialize with a default sample photo ready for 1-click conversion
     const sample = createSamplePhotoDataUrl('portrait');
@@ -176,6 +185,7 @@ export default function App() {
       style,
       customPalette,
       selectedModel,
+      ollamaEnabled,
       pipeline,
       colorPrecision,
       filterSpeckle,
@@ -217,6 +227,7 @@ export default function App() {
     style,
     customPalette,
     selectedModel,
+    ollamaEnabled,
     pipeline,
     colorPrecision,
     filterSpeckle,
@@ -252,6 +263,7 @@ export default function App() {
     const interval = setInterval(
       () => {
         fetchModelStatuses();
+        fetchEngineStatus();
       },
       hasActiveDownload ? 1500 : 6000
     );
@@ -291,6 +303,17 @@ export default function App() {
       }
     } catch {
       // Background poll: surfaced through the model-hub offline banner.
+    }
+  };
+
+  const fetchEngineStatus = async () => {
+    try {
+      const res = await apiFetch(`/api/engines/ollama`);
+      if (res.ok) {
+        setOllamaStatus(await res.json());
+      }
+    } catch {
+      // Background poll: the engine card shows the last known reachability.
     }
   };
 
@@ -366,6 +389,7 @@ export default function App() {
           use_custom_palette: useCustomPaletteOnPhoto,
           model_id: selectedModel,
           pipeline,
+          engine: selectedEngine,
         }),
       });
       const data = await res.json();
@@ -471,6 +495,64 @@ export default function App() {
     }
   };
 
+  const handleToggleOllama = async (enabled: boolean) => {
+    try {
+      const res = await apiFetch(`/api/engines/ollama`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not update Ollama settings');
+      setOllamaEnabled(enabled);
+      await Promise.all([fetchCuratedModels(), fetchEngineStatus()]);
+      notify(enabled ? 'Ollama models enabled' : 'Ollama models disabled');
+    } catch (err: any) {
+      notify(`Ollama settings error: ${err.message}`);
+    }
+  };
+
+  const handleDeleteModel = async (model: CuratedModel, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (!window.confirm('Delete model files for ' + model.id + '?')) return;
+    try {
+      const res = await apiFetch(`/api/models/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model_id: model.id, source: model.source || 'hf' }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not delete model files');
+      if (model.id === selectedModel) {
+        setSelectedModel(DEFAULT_SESSION.selectedModel);
+        setPipeline(DEFAULT_SESSION.pipeline);
+      }
+      await Promise.all([fetchCuratedModels(), fetchModelStatuses(), fetchEngineStatus()]);
+      notify(`Deleted ${data.deleted || model.id}`);
+    } catch (err: any) {
+      notify(`Delete error: ${err.message}`);
+    }
+  };
+
+  const handleClearModels = async () => {
+    if (!window.confirm('Clear all downloaded model files from the HF cache and Ollama?')) return;
+    try {
+      const res = await apiFetch(`/api/models/clear`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not clear model files');
+      setSelectedModel(DEFAULT_SESSION.selectedModel);
+      setPipeline(DEFAULT_SESSION.pipeline);
+      await Promise.all([fetchCuratedModels(), fetchModelStatuses(), fetchEngineStatus()]);
+      notify(`Cleared models (Ollama: ${data.ollama_deleted ?? 0})`);
+    } catch (err: any) {
+      notify(`Clear error: ${err.message}`);
+    }
+  };
+
   const handleSelectModel = (m: CuratedModel) => {
     if (m.unsupported_reason) {
       notify(`${m.id} cannot be used: ${m.unsupported_reason}`);
@@ -516,12 +598,13 @@ export default function App() {
                 }`}
               >
                 {m.name}
+                {m.source === 'ollama' && <span className="ml-1.5 text-[10px] opacity-70">Ollama</span>}
               </button>
             ))}
           </div>
         )}
         <p className="text-[11px] text-slate-500">
-          Pipeline: {modelPipeline || 'unknown'}
+          Engine: {selectedEngine} · Pipeline: {modelPipeline || 'unknown'}
           {manualPipelineOverride && <span className="text-amber-300"> · manual override</span>}
         </p>
       </div>
@@ -585,6 +668,7 @@ export default function App() {
           negative_prompt: negativePrompt,
           model_id: selectedModel,
           pipeline,
+          engine: selectedEngine,
           style,
           palette: customPalette,
           color_precision: colorPrecision,
@@ -757,6 +841,7 @@ export default function App() {
           intensity: enhanceIntensity,
           model_id: selectedModel,
           pipeline,
+          engine: selectedEngine,
         }),
       });
       const data = await res.json();
@@ -945,6 +1030,59 @@ export default function App() {
     setTimeout(() => setCopied(false), 1800);
   };
 
+  const engineCard = (
+    <div className="p-4 sm:p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+          <Cpu className="w-4 h-4 text-cyan-400" /> External model engines
+        </h2>
+        <button
+          type="button"
+          onClick={() => {
+            fetchCuratedModels();
+            fetchEngineStatus();
+          }}
+          className="min-h-[32px] inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-200 transition"
+        >
+          <RefreshCw className="w-3 h-3" /> Refresh
+        </button>
+      </div>
+      <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={ollamaEnabled}
+          onChange={(e) => handleToggleOllama(e.target.checked)}
+          className="w-4 h-4 accent-cyan-500"
+        />
+        Enable Ollama models
+      </label>
+      <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+        <span className="font-mono truncate">{ollamaStatus?.base_url || 'http://localhost:11434'}</span>
+        <span
+          className={`px-2 py-0.5 rounded-full border ${
+            ollamaStatus?.reachable
+              ? 'bg-emerald-950/80 border-emerald-700 text-emerald-300'
+              : 'bg-amber-950/80 border-amber-700 text-amber-300'
+          }`}
+        >
+          {ollamaStatus?.reachable ? 'Reachable' : 'Unreachable'}
+        </span>
+        <span>{ollamaStatus?.model_count ?? 0} models</span>
+      </div>
+      <p className="text-[11px] text-slate-500">
+        Models already present in Ollama appear in the picker once ready. Switching the selected
+        model switches the engine used by Prompt, Photo and Edit.
+      </p>
+      <button
+        type="button"
+        onClick={handleClearModels}
+        className="min-h-[36px] inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-rose-900/60 hover:bg-rose-800/70 border border-rose-700/70 text-rose-100 transition"
+      >
+        <Trash2 className="w-3.5 h-3.5" /> Clear all model files
+      </button>
+    </div>
+  );
+
   const modelHubCard = (
     <div
       className="p-4 sm:p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl space-y-3.5"
@@ -1031,6 +1169,11 @@ export default function App() {
                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-cyan-300">
                     {m.pipeline}
                   </span>
+                  {m.source === 'ollama' && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-sky-950/90 border border-sky-700/70 text-sky-300">
+                      Ollama
+                    </span>
+                  )}
                   {m.verified_svg && m.fits_gpu && (
                     <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950/90 border border-emerald-700/70 text-emerald-300 font-medium">
                       Verified SVG · fits GPU
@@ -1055,6 +1198,10 @@ export default function App() {
                       <RefreshCw className="w-3 h-3 animate-spin" />
                       {st.progress}% ({st.downloaded_mb || 0}/{st.total_mb || '?'} MB)
                     </span>
+                  ) : m.source === 'ollama' ? (
+                    <span className="text-[10px] px-2 py-1 text-slate-500">
+                      Not in Ollama
+                    </span>
                   ) : (
                     <button
                       type="button"
@@ -1064,6 +1211,17 @@ export default function App() {
                     >
                       <CloudDownload className="w-3.5 h-3.5" />
                       Download HF
+                    </button>
+                  )}
+                  {isReady && (
+                    <button
+                      type="button"
+                      onClick={(e) => handleDeleteModel(m, e)}
+                      className="min-h-[32px] inline-flex items-center gap-1 text-[11px] px-3 py-1 rounded-full bg-rose-950/80 hover:bg-rose-900/80 text-rose-300 font-medium transition"
+                      title={`Delete downloaded files for ${m.id}`}
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Delete
                     </button>
                   )}
                 </div>
@@ -1574,6 +1732,7 @@ export default function App() {
               </div>
             )}
             <div className="space-y-5">
+              {engineCard}
               {modelHubCard}
               <div className="p-4 sm:p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl space-y-3">
                 <h2 className="text-sm font-semibold text-slate-200 flex items-center gap-2">

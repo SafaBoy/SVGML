@@ -1,6 +1,7 @@
 export interface CuratedModel {
   id: string;
   name: string;
+  source?: 'hf' | 'ollama';
   pipeline: 'direct-svg' | 'diffusion-vtracer' | 'neural-vtracer';
   framework: string;
   description: string;
