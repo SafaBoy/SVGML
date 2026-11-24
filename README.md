@@ -57,7 +57,8 @@ See `.env.example` for a copy-pasteable set of defaults.
 1. **Direct Text-to-SVG Code Generation (`direct-svg`)** — the ML worker loads the checkpoint with
    `transformers` and decodes SVG markup directly:
    - `vinoku89/svg-code-generator` (Qwen3-0.6B SVG fine-tune, chat template) — works out of the box
-   - `Qwen/Qwen2.5-Coder-1.5B-Instruct` (instructed colored SVG XML) — works out of the box
+   - `Qwen/Qwen2.5-Coder-1.5B-Instruct` — a general code model prompted with an SVG schema, not
+     SVG-trained; output is unconstrained
    - `Norod78/gpt-fluentui-flat-svg` (completion-only GPT-2, emits Fluent UI icon markup)
    - `mohannad-tazi/Llama-3.1-8B-Instruct-text-to-svg` — the Hub repo only stores a LoRA adapter;
      download the Llama-3.1-8B base model and merge it first
@@ -67,6 +68,10 @@ See `.env.example` for a copy-pasteable set of defaults.
    Both of those repositories stay in `/api/models/curated` with an `unsupported_reason` so search
    results can explain them; the model hub marks them **Unsupported**, refuses to select or download
    them, and shows the reason. Direct API calls with either id still get the explicit diagnostic.
+   Models verified as SVG-trained and small enough for the reported GPU VRAM carry the
+   **Verified SVG · fits GPU** badge in the model hub; oversized or unknown-size search results are
+   marked unsupported before download. Generation results carry `warning` / `fallback_used` when a
+   fallback or weak SVG output was used, and the studio shows an amber notice above the canvas.
    If no `direct-svg` model can be loaded (not cached, out of memory, or unsupported), the worker
    generates a deterministic procedural SVG and reports that honestly in `backend_used`
    (`... | hf skipped: <reason>`), with `model_used = svgml-procedural-templates`.

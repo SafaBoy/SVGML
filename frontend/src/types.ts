@@ -10,6 +10,9 @@ export interface CuratedModel {
   recommended: boolean;
   cpu_friendly: boolean;
   unsupported_reason?: string;
+  verified_svg?: boolean;
+  estimated_vram_mb?: number;
+  fits_gpu?: boolean;
 }
 
 export interface ModelStatus {
@@ -39,4 +42,6 @@ export interface GalleryItem {
   rust_process_ms: number;
   total_ms: number;
   created_at: string;
+  warning?: string;
+  fallback_used?: boolean;
 }

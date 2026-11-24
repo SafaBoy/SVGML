@@ -1970,6 +1970,11 @@ export default function App() {
                         <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-cyan-300">
                           {m.pipeline}
                         </span>
+                        {m.verified_svg && m.fits_gpu && (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950/90 border border-emerald-700/70 text-emerald-300 font-medium">
+                            Verified SVG · fits GPU
+                          </span>
+                        )}
                         {isUnsupported && (
                           <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-950/90 border border-amber-700/70 text-amber-300">
                             Unsupported
@@ -2115,6 +2120,16 @@ export default function App() {
                 </button>
               </div>
             </div>
+
+            {activeItem?.warning && (
+              <div
+                role="status"
+                className="rounded-xl border border-amber-700/70 bg-amber-950/60 px-3 py-2 text-[11px] text-amber-200"
+              >
+                {activeItem.warning}
+                {activeItem.fallback_used ? ' Output came from a built-in fallback, not the selected model.' : ''}
+              </div>
+            )}
 
             {/* Prominent Download & Export Bar */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 p-3 rounded-xl bg-slate-950/90 border border-slate-800/90">
