@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -38,9 +39,111 @@ type CuratedModel struct {
 	Likes       int      `json:"likes"`
 	Recommended bool     `json:"recommended"`
 	CPUFriendly bool     `json:"cpu_friendly"`
+	// VerifiedSVG is true only for repositories on the explicit SVG-training
+	// allowlist; free-text tags and descriptions never set it.
+	VerifiedSVG bool `json:"verified_svg"`
+	// EstimatedVRAMMB is the fp16 weight estimate plus runtime overhead.
+	EstimatedVRAMMB int `json:"estimated_vram_mb"`
+	// FitsGPU reports whether that estimate fits the worker's reported VRAM.
+	FitsGPU bool `json:"fits_gpu"`
 	// Non-empty when the repository cannot be used by this worker as-is.
 	// The studio shows the reason and refuses to select or download the model.
 	UnsupportedReason string `json:"unsupported_reason,omitempty"`
+}
+
+const vramOverheadMB = 512
+
+var (
+	hfAPIBaseURL    = "https://huggingface.co/api/models"
+	vramBudgetMu    sync.Mutex
+	vramBudgetCache = map[string]struct {
+		mb int
+		at time.Time
+	}{}
+)
+
+func verifiedSVGRepos(id string) bool {
+	switch id {
+	case "Norod78/gpt-fluentui-flat-svg", "vinoku89/svg-code-generator":
+		return true
+	default:
+		return false
+	}
+}
+
+// estimateVRAMMB converts safetensors byte size to an fp16 VRAM estimate.
+func estimateVRAMMB(totalBytes int64) int {
+	if totalBytes <= 0 {
+		return 0
+	}
+	return int(totalBytes/(1024*1024))*2 + vramOverheadMB
+}
+
+// gpuVRAMBudgetMB reads the worker's GPU budget, caching failures and successes
+// for five minutes per worker URL so repeated searches do not hammer /health.
+func gpuVRAMBudgetMB() int {
+	workerURL := getEnv("ML_WORKER_URL", "http://localhost:18082")
+	vramBudgetMu.Lock()
+	cached, ok := vramBudgetCache[workerURL]
+	vramBudgetMu.Unlock()
+	if ok && time.Since(cached.at) < 5*time.Minute {
+		return cached.mb
+	}
+
+	mb := 0
+	client := &http.Client{Timeout: 3 * time.Second}
+	if resp, err := client.Get(workerURL + "/health"); err == nil {
+		var health struct {
+			VRAMTotalMB int `json:"vram_total_mb"`
+		}
+		if resp.StatusCode == http.StatusOK {
+			_ = json.NewDecoder(resp.Body).Decode(&health)
+			mb = health.VRAMTotalMB
+		}
+		resp.Body.Close()
+	}
+
+	vramBudgetMu.Lock()
+	vramBudgetCache[workerURL] = struct {
+		mb int
+		at time.Time
+	}{mb: mb, at: time.Now()}
+	vramBudgetMu.Unlock()
+	return mb
+}
+
+// applyVRAMFit attaches size and fit metadata; totalBytes overrides the
+// declared estimate when safetensors metadata is available.
+func applyVRAMFit(m CuratedModel, totalBytes int64, budgetMB int) CuratedModel {
+	if totalBytes > 0 {
+		m.EstimatedVRAMMB = estimateVRAMMB(totalBytes)
+	}
+	m.FitsGPU = budgetMB > 0 && m.EstimatedVRAMMB > 0 && m.EstimatedVRAMMB <= budgetMB
+	m.CPUFriendly = m.FitsGPU
+	if !m.FitsGPU && m.UnsupportedReason == "" {
+		switch {
+		case budgetMB <= 0:
+			// No GPU budget reported: do not claim a model is usable, but do
+			// not block either - the worker may simply be unavailable.
+		case m.EstimatedVRAMMB <= 0:
+			m.UnsupportedReason = "Model size is unknown; cannot verify it fits this GPU."
+		default:
+			m.UnsupportedReason = fmt.Sprintf(
+				"Needs about %d MB VRAM (fp16 plus overhead) but this worker has %d MB; too large to load.",
+				m.EstimatedVRAMMB, budgetMB,
+			)
+		}
+	}
+	return m
+}
+
+func modelsWithVRAMFit(models []CuratedModel) []CuratedModel {
+	budget := gpuVRAMBudgetMB()
+	out := make([]CuratedModel, 0, len(models))
+	for _, m := range models {
+		out = append(out, applyVRAMFit(m, 0, budget))
+	}
+	return out
 }
 
 type GenerateRequest struct {
@@ -150,64 +253,73 @@ type RustSvgResponse struct {
 
 var curatedModels = []CuratedModel{
 	{
-		ID:          "Norod78/gpt-fluentui-flat-svg",
-		Name:        "FluentUI Flat Color SVG Generator (GPT-2)",
-		Pipeline:    "direct-svg",
-		Framework:   "PyTorch / Transformers (359 MB)",
-		Description: "Hugging Face GPT-2 model trained directly on Microsoft FluentUI flat colored vector icons (<svg> path generation).",
-		Tags:        []string{"text-to-svg", "fluentui", "flat-svg", "pytorch", "color"},
-		Downloads:   12450,
-		Likes:       98,
-		Recommended: true,
-		CPUFriendly: true,
+		ID:              "Norod78/gpt-fluentui-flat-svg",
+		Name:            "FluentUI Flat Color SVG Generator (GPT-2)",
+		Pipeline:        "direct-svg",
+		Framework:       "PyTorch / Transformers (359 MB)",
+		Description:     "Hugging Face GPT-2 model trained directly on Microsoft FluentUI flat colored vector icons (<svg> path generation).",
+		Tags:            []string{"text-to-svg", "fluentui", "flat-svg", "pytorch", "color"},
+		Downloads:       12450,
+		Likes:           98,
+		Recommended:     true,
+		CPUFriendly:     true,
+		VerifiedSVG:     true,
+		EstimatedVRAMMB: 1230,
 	},
 	{
-		ID:          "vinoku89/svg-code-generator",
-		Name:        "SVG Code Generator (Qwen3-0.6B Text-to-SVG)",
-		Pipeline:    "direct-svg",
-		Framework:   "PyTorch / Transformers (1.1 GB)",
-		Description: "Fine-tuned Qwen3-0.6B causal language model trained to output structured colored SVG XML code from text prompts.",
-		Tags:        []string{"text-to-svg", "svg", "code-generation", "pytorch", "color"},
-		Downloads:   18420,
-		Likes:       142,
-		Recommended: true,
-		CPUFriendly: true,
+		ID:              "vinoku89/svg-code-generator",
+		Name:            "SVG Code Generator (Qwen3-0.6B Text-to-SVG)",
+		Pipeline:        "direct-svg",
+		Framework:       "PyTorch / Transformers (1.1 GB)",
+		Description:     "Fine-tuned Qwen3-0.6B causal language model trained to output structured colored SVG XML code from text prompts.",
+		Tags:            []string{"text-to-svg", "svg", "code-generation", "pytorch", "color"},
+		Downloads:       18420,
+		Likes:           142,
+		Recommended:     true,
+		CPUFriendly:     true,
+		VerifiedSVG:     true,
+		EstimatedVRAMMB: 2764,
 	},
 	{
-		ID:          "segmind/tiny-sd",
-		Name:        "Tiny-SD + Rust vtracer Color Vectorizer",
-		Pipeline:    "diffusion-vtracer",
-		Framework:   "PyTorch Diffusers + Rust vtracer (1.0 GB)",
-		Description: "Lightweight distilled Stable Diffusion model in PyTorch paired with Rust's hierarchical vtracer engine for multi-layered colored SVGs.",
-		Tags:        []string{"text-to-image", "diffusers", "vtracer", "color-svg", "pytorch"},
-		Downloads:   154300,
-		Likes:       615,
-		Recommended: true,
-		CPUFriendly: true,
+		ID:              "segmind/tiny-sd",
+		Name:            "Tiny-SD + Rust vtracer Color Vectorizer",
+		Pipeline:        "diffusion-vtracer",
+		Framework:       "PyTorch Diffusers + Rust vtracer (1.0 GB)",
+		Description:     "Lightweight distilled Stable Diffusion model in PyTorch paired with Rust's hierarchical vtracer engine for multi-layered colored SVGs.",
+		Tags:            []string{"text-to-image", "diffusers", "vtracer", "color-svg", "pytorch"},
+		Downloads:       154300,
+		Likes:           615,
+		Recommended:     true,
+		CPUFriendly:     false,
+		EstimatedVRAMMB: 2560,
 	},
 	{
-		ID:          "Qwen/Qwen2.5-Coder-1.5B-Instruct",
-		Name:        "Qwen 2.5 Coder 1.5B Instruct (SVG XML)",
-		Pipeline:    "direct-svg",
-		Framework:   "PyTorch / Transformers (2.9 GB)",
-		Description: "Instruction-tuned 1.5B coding LLM prompted with strict SVG schema constraints for clean geometric vector icons with gradients.",
-		Tags:        []string{"qwen2.5", "svg-xml", "instruct", "pytorch", "color"},
-		Downloads:   412000,
-		Likes:       1250,
-		Recommended: true,
-		CPUFriendly: true,
+		ID:              "Qwen/Qwen2.5-Coder-1.5B-Instruct",
+		Name:            "Qwen 2.5 Coder 1.5B Instruct (general code model)",
+		Pipeline:        "direct-svg",
+		Framework:       "PyTorch / Transformers (2.9 GB)",
+		Description:     "General-purpose 1.5B coding LLM prompted with an SVG schema. It is not an SVG model; output may not follow SVG conventions.",
+		Tags:            []string{"qwen2.5", "svg-xml", "instruct", "pytorch", "color"},
+		Downloads:       412000,
+		Likes:           1250,
+		Recommended:     true,
+		CPUFriendly:     true,
+		VerifiedSVG:     false,
+		EstimatedVRAMMB: 6450,
 	},
 	{
-		ID:          "Qwen/Qwen2.5-Coder-0.5B-Instruct",
-		Name:        "Qwen 2.5 Coder 0.5B Instruct (SVG XML)",
-		Pipeline:    "direct-svg",
-		Framework:   "PyTorch / Transformers (950 MB)",
-		Description: "Compact 0.5B instruction-tuned coding LLM prompted with SVG schema constraints for clean geometric vector icons.",
-		Tags:        []string{"qwen2.5", "svg-xml", "instruct", "pytorch", "color"},
-		Downloads:   285000,
-		Likes:       740,
-		Recommended: true,
-		CPUFriendly: true,
+		ID:              "Qwen/Qwen2.5-Coder-0.5B-Instruct",
+		Name:            "Qwen 2.5 Coder 0.5B Instruct (general code model)",
+		Pipeline:        "direct-svg",
+		Framework:       "PyTorch / Transformers (950 MB)",
+		Description:     "Compact 0.5B general-purpose coding LLM prompted with an SVG schema; not an SVG model.",
+		Tags:            []string{"qwen2.5", "svg-xml", "instruct", "pytorch", "color"},
+		Downloads:       285000,
+		Likes:           740,
+		Recommended:     true,
+		CPUFriendly:     true,
+		VerifiedSVG:     false,
+		EstimatedVRAMMB: 2412,
 	},
 	{
 		ID:                "OmniSVG/OmniSVG1.1_4B",
@@ -220,6 +332,7 @@ var curatedModels = []CuratedModel{
 		Likes:             890,
 		Recommended:       false,
 		CPUFriendly:       false,
+		EstimatedVRAMMB:   17306,
 		UnsupportedReason: "OmniSVG checkpoints emit SVG path tokens that require the upstream SketchDecoder and custom SVGTokenizer; this worker has no decoder (and no tokenizer files ship in the repo).",
 	},
 	{
@@ -233,6 +346,7 @@ var curatedModels = []CuratedModel{
 		Likes:             94,
 		Recommended:       false,
 		CPUFriendly:       false,
+		EstimatedVRAMMB:   33280,
 		UnsupportedReason: "This repository contains only a LoRA adapter (9 MB), not full Llama 3.1 weights; the base model is not bundled and cannot be loaded directly.",
 	},
 }
@@ -321,7 +435,7 @@ func main() {
 	// Curated HF models endpoint
 	mux.HandleFunc("/api/models/curated", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"models": curatedModels,
+			"models": modelsWithVRAMFit(curatedModels),
 		})
 	})
 
@@ -713,12 +827,16 @@ type hfAPIModel struct {
 	Tags        []string `json:"tags"`
 	Downloads   int      `json:"downloads"`
 	Likes       int      `json:"likes"`
+	Safetensors struct {
+		Total int64 `json:"total"`
+	} `json:"safetensors"`
 }
 
 func searchHuggingFaceHub(hfToken, query, pipelineFilter string) ([]CuratedModel, string, error) {
 	client := &http.Client{Timeout: 8 * time.Second}
 	apiURL := fmt.Sprintf(
-		"https://huggingface.co/api/models?search=%s&sort=downloads&direction=-1&limit=18",
+		"%s?search=%s&sort=downloads&direction=-1&limit=18&expand%%5B%%5D=safetensors",
+		hfAPIBaseURL,
 		url.QueryEscape(query),
 	)
 
@@ -774,7 +892,7 @@ func searchHuggingFaceHub(hfToken, query, pipelineFilter string) ([]CuratedModel
 		}
 
 		seen[id] = true
-		results = append(results, CuratedModel{
+		base := CuratedModel{
 			ID:          id,
 			Name:        id,
 			Pipeline:    pipeline,
@@ -784,8 +902,9 @@ func searchHuggingFaceHub(hfToken, query, pipelineFilter string) ([]CuratedModel
 			Downloads:   rm.Downloads,
 			Likes:       rm.Likes,
 			Recommended: rm.Likes > 50,
-			CPUFriendly: !strings.Contains(strings.ToLower(id), "8b") && !strings.Contains(strings.ToLower(id), "7b"),
-		})
+			VerifiedSVG: verifiedSVGRepos(id),
+		}
+		results = append(results, applyVRAMFit(base, rm.Safetensors.Total, gpuVRAMBudgetMB()))
 	}
 
 	return results, "huggingface-hub-live", nil
@@ -806,7 +925,7 @@ func filterCurated(query, pipelineFilter string) []CuratedModel {
 			out = append(out, m)
 		}
 	}
-	return out
+	return modelsWithVRAMFit(out)
 }
 
 func containsTag(tags []string, sub string) bool {
