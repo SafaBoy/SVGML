@@ -124,3 +124,201 @@ export const SAMPLE_PROMPTS: string[] = [
   'A cute geometric fox mascot icon with warm orange and violet gradients',
   'A blooming lotus flower emblem with emerald and rose petals',
 ];
+
+export type AddOnCategory = 'Composition' | 'Setting' | 'Lighting' | 'Texture' | 'Framing';
+
+export const ADDON_CATEGORIES: readonly AddOnCategory[] = [
+  'Composition',
+  'Setting',
+  'Lighting',
+  'Texture',
+  'Framing',
+];
+
+export interface PromptAddOn {
+  id: string;
+  label: string;
+  clause: string;
+  category: AddOnCategory;
+  tags: string[];
+  styles?: string[];
+}
+
+export const PROMPT_ADDONS: PromptAddOn[] = [
+  {
+    id: 'composition-centered',
+    label: 'Centered symmetry',
+    clause: 'centered symmetrical composition',
+    category: 'Composition',
+    tags: ['centered', 'symmetry', 'icon', 'badge'],
+  },
+  {
+    id: 'composition-layers',
+    label: 'Layered depth',
+    clause: 'layered foreground, midground and background',
+    category: 'Composition',
+    tags: ['layered', 'depth', 'landscape', 'mountains'],
+  },
+  {
+    id: 'composition-focal',
+    label: 'Clear focal point',
+    clause: 'rule of thirds placement with a clear focal point',
+    category: 'Composition',
+    tags: ['focal', 'thirds', 'composition', 'rocket'],
+  },
+  {
+    id: 'composition-negative-space',
+    label: 'Negative space',
+    clause: 'single bold subject with generous negative space',
+    category: 'Composition',
+    tags: ['minimal', 'subject', 'negative-space', 'icon'],
+  },
+  {
+    id: 'setting-sky',
+    label: 'Gradient sky',
+    clause: 'floating above a soft gradient sky',
+    category: 'Setting',
+    tags: ['sky', 'space', 'rocket', 'sunset'],
+  },
+  {
+    id: 'setting-studio-floor',
+    label: 'Studio floor',
+    clause: 'atop a quiet tiled studio floor',
+    category: 'Setting',
+    tags: ['floor', 'studio', 'isometric', 'tiles'],
+  },
+  {
+    id: 'setting-botanical',
+    label: 'Botanical leaves',
+    clause: 'framed by subtle botanical leaves',
+    category: 'Setting',
+    tags: ['botanical', 'leaves', 'lotus', 'flower', 'fox'],
+  },
+  {
+    id: 'setting-neon-alley',
+    label: 'Neon alley',
+    clause: 'suspended in a dark neon alley',
+    category: 'Setting',
+    tags: ['alley', 'city', 'robot', 'visor'],
+    styles: ['cyberpunk'],
+  },
+  {
+    id: 'lighting-rim',
+    label: 'Upper-left rim light',
+    clause: 'soft rim light from upper left',
+    category: 'Lighting',
+    tags: ['rim', 'light', 'glow', 'visor'],
+  },
+  {
+    id: 'lighting-backlight',
+    label: 'Warm backlight',
+    clause: 'warm backlight with gentle falloff',
+    category: 'Lighting',
+    tags: ['backlight', 'sunset', 'warm', 'flower'],
+  },
+  {
+    id: 'lighting-spotlight',
+    label: 'Overhead spotlight',
+    clause: 'high-contrast spotlight from above',
+    category: 'Lighting',
+    tags: ['spotlight', 'contrast', 'stage', 'mascot'],
+  },
+  {
+    id: 'lighting-ambient',
+    label: 'Cool ambient glow',
+    clause: 'cool ambient glow with subtle highlights',
+    category: 'Lighting',
+    tags: ['ambient', 'neon', 'highlights', 'robot'],
+    styles: ['cyberpunk'],
+  },
+  {
+    id: 'texture-paper',
+    label: 'Paper grain',
+    clause: 'subtle paper-grain texture',
+    category: 'Texture',
+    tags: ['paper', 'grain', 'texture', 'line-art'],
+  },
+  {
+    id: 'texture-hatching',
+    label: 'Fine hatching',
+    clause: 'fine cross-hatched shading',
+    category: 'Texture',
+    tags: ['hatch', 'shading', 'ink', 'fox'],
+  },
+  {
+    id: 'texture-matte',
+    label: 'Matte finish',
+    clause: 'smooth matte finish with crisp edges',
+    category: 'Texture',
+    tags: ['matte', 'crisp', 'flat-icon', 'icon'],
+  },
+  {
+    id: 'texture-metal',
+    label: 'Brushed metal',
+    clause: 'brushed-metal sheen on accents',
+    category: 'Texture',
+    tags: ['metal', 'sheen', 'robot', 'visor'],
+  },
+  {
+    id: 'framing-badge',
+    label: 'Circular badge',
+    clause: 'badge-style circular frame',
+    category: 'Framing',
+    tags: ['badge', 'circular', 'icon', 'mascot'],
+  },
+  {
+    id: 'framing-hex',
+    label: 'Neon hexagon',
+    clause: 'hexagonal neon border with inner padding',
+    category: 'Framing',
+    tags: ['hex', 'neon', 'border', 'cyberpunk'],
+    styles: ['cyberpunk'],
+  },
+  {
+    id: 'framing-rounded-square',
+    label: 'Rounded square',
+    clause: 'simple rounded-square outline',
+    category: 'Framing',
+    tags: ['rounded', 'square', 'icon', 'flat-icon'],
+  },
+  {
+    id: 'framing-full-bleed',
+    label: 'Full bleed',
+    clause: 'full-bleed composition with cropped edges',
+    category: 'Framing',
+    tags: ['bleed', 'cropped', 'landscape', 'mountains'],
+  },
+];
+
+export function rankPromptAddons(
+  prompt: string,
+  style: string,
+  pipeline: string
+): Array<PromptAddOn & { score: number }> {
+  const context = new Set<string>([
+    ...(prompt.toLowerCase().match(/[a-z0-9]+/g) ?? []),
+    style.toLowerCase(),
+    pipeline.toLowerCase(),
+  ]);
+  return PROMPT_ADDONS.map((addon, index) => {
+    let score = 0;
+    for (const tag of addon.tags) {
+      if (context.has(tag.toLowerCase())) score += 1;
+    }
+    if (addon.styles?.some((candidate) => context.has(candidate.toLowerCase()))) score += 2;
+    return { ...addon, score, index };
+  })
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map(({ index, ...addon }) => addon);
+}
+
+export function togglePromptAddon(prompt: string, clause: string): string {
+  const match = prompt.toLowerCase().indexOf(clause.toLowerCase());
+  if (match === -1) {
+    const base = prompt.replace(/[\s,]+$/, '');
+    return base ? `${base}, ${clause}` : clause;
+  }
+  const before = prompt.slice(0, match).replace(/[\s,]+$/, '');
+  const after = prompt.slice(match + clause.length).replace(/^[\s,]+/, '');
+  return [before, after].filter(Boolean).join(', ');
+}
