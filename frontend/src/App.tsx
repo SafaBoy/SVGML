@@ -37,6 +37,10 @@ import {
   ENHANCE_MODES,
   SYSTEM_PROMPT_PRESETS,
   SAMPLE_PROMPTS,
+  ADDON_CATEGORIES,
+  PROMPT_ADDONS,
+  rankPromptAddons,
+  togglePromptAddon,
 } from './presets';
 import { API_BASE, API_TOKEN, GALLERY_PAGE_SIZE, apiFetch } from './api';
 import { createSamplePhotoDataUrl } from './samplePhoto';
@@ -128,7 +132,11 @@ export default function App() {
   >(initialSession.mobileSection);
   const [lightCanvas, setLightCanvas] = useState(initialSession.lightCanvas);
   const [copied, setCopied] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(false);
   const [health, setHealth] = useState<any>(null);
+
+  // The Prompt tab is a JSX branch, so ranking is computed at component scope.
+  const rankedAddons = rankPromptAddons(prompt, style, pipeline);
 
   const recordGenerated = (item: GalleryItem) => {
     setActiveItem(item);
@@ -1628,6 +1636,16 @@ export default function App() {
                     <Sparkles className="w-4 h-4 text-indigo-400" />
                     Vector Prompt
                   </label>
+                  <button
+                    type="button"
+                    aria-expanded={showSuggestions}
+                    aria-controls="prompt-suggestions"
+                    onClick={() => setShowSuggestions((open) => !open)}
+                    className="inline-flex items-center gap-1.5 min-h-[36px] px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-800/80 hover:bg-slate-700 active:bg-slate-700 text-slate-200 border border-slate-700/60 transition"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+                    Suggestions
+                  </button>
                 </div>
 
                 <textarea
@@ -1637,6 +1655,48 @@ export default function App() {
                   placeholder="Describe the colored vector icon or illustration you want..."
                   className="w-full rounded-xl bg-slate-950 border border-slate-800 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 p-3 text-sm sm:text-base text-slate-100 placeholder-slate-500 outline-none transition"
                 />
+
+                {showSuggestions && (
+                  <div
+                    id="prompt-suggestions"
+                    className="space-y-2 rounded-xl border border-slate-700/60 bg-slate-900/70 p-2.5 max-h-64 overflow-y-auto"
+                  >
+                    <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                      Pick details to add
+                    </p>
+                    {ADDON_CATEGORIES.map((category) => (
+                      <div key={category} className="space-y-1">
+                        <p className="text-[11px] font-medium text-indigo-300">{category}</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {rankedAddons
+                            .filter((addon) => addon.category === category)
+                            .map((addon) => {
+                              const active = prompt.toLowerCase().includes(addon.clause.toLowerCase());
+                              return (
+                                <button
+                                  key={addon.id}
+                                  type="button"
+                                  aria-pressed={active}
+                                  title={addon.clause}
+                                  onClick={() => setPrompt(togglePromptAddon(prompt, addon.clause))}
+                                  className={`min-h-[36px] text-xs px-2.5 py-1.5 rounded-lg border transition ${
+                                    active
+                                      ? 'bg-indigo-600/30 border-indigo-400 text-indigo-100'
+                                      : 'bg-slate-800/80 border-slate-700/60 text-slate-300 hover:bg-slate-700'
+                                  }`}
+                                >
+                                  {addon.score > 0 && (
+                                    <span aria-hidden="true" className="text-amber-300">✦ </span>
+                                  )}
+                                  {addon.label}
+                                </button>
+                              );
+                            })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
 
                 {/* Quick sample prompts */}
                 <div className="flex flex-wrap gap-1.5">

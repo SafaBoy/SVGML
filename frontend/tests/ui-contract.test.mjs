@@ -66,3 +66,20 @@ test('a legacy persisted section does not leave studio mode out of sync', () => 
   );
   assert.match(app, /useState<'text' \| 'photo' \| 'editor'>\(resolvedStudioMode\)/);
 });
+
+test('Suggestions button opens an inline, context-ranked add-on panel', () => {
+  assert.match(app, /aria-expanded=\{showSuggestions\}/);
+  assert.match(app, /aria-controls="prompt-suggestions"/);
+  assert.match(app, /id="prompt-suggestions"/);
+  assert.match(app, /rankPromptAddons\(prompt, style, pipeline\)/);
+  assert.match(app, /setPrompt\(togglePromptAddon\(prompt, addon\.clause\)\)/);
+  assert.match(app, /aria-pressed=\{active\}/);
+  assert.ok(app.indexOf('id="prompt-suggestions"') < app.indexOf('SAMPLE_PROMPTS.map'));
+});
+
+test('Suggestions panel state is not persisted', () => {
+  assert.doesNotMatch(session, /showSuggestions/);
+  const saveStart = app.indexOf('const next: SessionState = {');
+  const saveEnd = app.indexOf('const serialized = JSON.stringify(next)', saveStart);
+  assert.doesNotMatch(app.slice(saveStart, saveEnd), /showSuggestions/);
+});

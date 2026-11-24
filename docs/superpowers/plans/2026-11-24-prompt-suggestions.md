@@ -140,7 +140,7 @@ git commit -m "feat(frontend): add pickable prompt add-on catalog"
 - Consumes from Task 1: `ADDON_CATEGORIES`, `PROMPT_ADDONS`, `rankPromptAddons(prompt, style, pipeline)`, `togglePromptAddon(prompt, clause)`, `PromptAddOn`.
 - Produces: local `showSuggestions` boolean state and the inline panel; no exported interface.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `frontend/tests/ui-contract.test.mjs`:
 
@@ -163,12 +163,12 @@ test('Suggestions panel state is not persisted', () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd frontend && node --test tests/*.test.mjs`
 Expected: FAIL — 2 new tests fail with "No match found" assertions; the 9 pre-existing contract tests and 6 add-on tests still pass.
 
-- [ ] **Step 3: Implement the panel in `frontend/src/App.tsx`**
+- [x] **Step 3: Implement the panel in `frontend/src/App.tsx`**
 
 Import `ADDON_CATEGORIES`, `PROMPT_ADDONS`, `rankPromptAddons`, `togglePromptAddon` alongside the existing `presets` imports; reuse the already-imported `Sparkles` icon.
 
@@ -178,17 +178,17 @@ In the Prompt header that currently renders only the `Vector Prompt` label, add 
 
 Immediately after the textarea and before the `SAMPLE_PROMPTS.map` block, render the panel when `showSuggestions` is true, with `id="prompt-suggestions"`, `max-h-64 overflow-y-auto`, and a heading such as `Pick details to add`. Compute `const rankedAddons = rankPromptAddons(prompt, style, pipeline);` inside the Prompt branch. For each `category` in `ADDON_CATEGORIES`, render a labelled group of chips from `rankedAddons.filter((addon) => addon.category === category)` (keep catalog order within groups). For each chip: `active` is a case-insensitive check for `addon.clause` in `prompt`; `onClick={() => setPrompt(togglePromptAddon(prompt, addon.clause))}`; `aria-pressed={active}`; `title={addon.clause}`; `✦` marker when `addon.score > 0`; distinct active styling; `min-h-[36px]` touch target. Leave the sample-prompt chips untouched.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `cd frontend && node --test tests/*.test.mjs`
 Expected: PASS — 17 tests (9 pre-existing contract, 6 add-on, 2 new UI contract).
 
-- [ ] **Step 5: Verify the production build**
+- [x] **Step 5: Verify the production build**
 
 Run: `cd frontend && npm ci && npm run build`
 Expected: `npm ci` completes, `tsc -b && vite build` exits 0. `npm ci` is required because `frontend/node_modules` was removed by a clean-desk run.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add frontend/src/App.tsx frontend/tests/ui-contract.test.mjs
