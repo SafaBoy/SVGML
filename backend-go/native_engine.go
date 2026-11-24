@@ -487,6 +487,7 @@ type EnhanceSvgRequest struct {
 	Palette     []string `json:"palette,omitempty"`
 	Intensity   int      `json:"intensity,omitempty"`
 	ModelID     string   `json:"model_id,omitempty"`
+	Pipeline    string   `json:"pipeline,omitempty"`
 }
 
 type MLEnhanceResponse struct {

@@ -180,6 +180,7 @@ type MLInferRequest struct {
 	MaxNewTokens   int      `json:"max_new_tokens,omitempty"`
 	GuidanceScale  float64  `json:"guidance_scale,omitempty"`
 	Seed           int64    `json:"seed,omitempty"`
+	RequireHF      bool     `json:"require_hf,omitempty"`
 }
 
 type MLInferResponse struct {
@@ -230,6 +231,8 @@ type ImageToSvgRequest struct {
 	FilterSpeckle    int      `json:"filter_speckle,omitempty"`
 	Palette          []string `json:"palette,omitempty"`
 	UseCustomPalette bool     `json:"use_custom_palette,omitempty"`
+	ModelID          string   `json:"model_id,omitempty"`
+	Pipeline         string   `json:"pipeline,omitempty"`
 }
 
 type MLLineArtResponse struct {
