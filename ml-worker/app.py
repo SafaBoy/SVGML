@@ -140,6 +140,7 @@ class InferRequest(BaseModel):
     guidance_scale: Optional[float] = 7.5
     seed: Optional[int] = None
     use_hf_model: Optional[bool] = True
+    require_hf: bool = False
 
 
 class InferResponse(BaseModel):
@@ -450,6 +451,26 @@ def infer(req: InferRequest):
         and (cached or os.getenv("HF_EAGER_DOWNLOAD", "false").lower() == "true")
     )
 
+    if req.require_hf:
+        reason = ""
+        if not should_run_hf:
+            reason = f"{req.model_id} is not in the local Hugging Face cache (download it first or set HF_EAGER_DOWNLOAD=true)"
+        elif req.pipeline in ("neural-vtracer", "litert-vtracer"):
+            reason = f"pipeline {req.pipeline} is procedural and cannot run a downloaded model"
+        elif req.pipeline == "diffusion-vtracer":
+            is_diffusion_repo = any(
+                k in req.model_id.lower()
+                for k in ["sd", "diffusion", "sdxl", "flux", "dreamshaper", "kandinsky", "playground"]
+            )
+            if not is_diffusion_repo:
+                reason = f"{req.model_id} is not a diffusion model"
+            elif not (DIFFUSERS_AVAILABLE and TORCH_AVAILABLE):
+                reason = "diffusers and torch are required for diffusion models"
+        elif not (TRANSFORMERS_AVAILABLE and TORCH_AVAILABLE):
+            reason = "transformers and torch are required for direct SVG models"
+        if reason:
+            raise HTTPException(status_code=422, detail=short_reason(reason))
+
     # 1. PyTorch neural color-field raster + Rust vtracer pipeline
     if req.pipeline in ("neural-vtracer", "litert-vtracer"):  # second id kept for old clients
         img_b64, backend_label = run_neural_raster_synthesizer(
@@ -497,6 +518,11 @@ def infer(req: InferRequest):
                 )
             except Exception as exc:
                 logger.warning("HF Diffusers fallback triggered for %s: %s", req.model_id, exc)
+                if req.require_hf:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"HF diffusion failed for {req.model_id}: {short_reason(str(exc))}",
+                    ) from exc
 
         img_b64, backend_label = run_neural_raster_synthesizer(
             req.prompt,
@@ -553,6 +579,12 @@ def infer(req: InferRequest):
         hf_skip_reason = "transformers is not installed"
     elif not TORCH_AVAILABLE:
         hf_skip_reason = "torch is not installed"
+
+    if req.require_hf:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{req.model_id} could not produce valid SVG: {short_reason(hf_skip_reason or 'no reason reported')}",
+        )
 
     svg_code, backend_label = generate_pytorch_semantic_colored_svg(
         req.prompt,
