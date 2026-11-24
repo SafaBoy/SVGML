@@ -167,3 +167,70 @@ func TestRustSVGFromModelOutputVectorizesModelImage(t *testing.T) {
 		t.Errorf("vectorized the wrong image: %+v", vectorBody)
 	}
 }
+
+func TestTryEditModelUsesOriginalSVGAndEnhanceInstruction(t *testing.T) {
+	var inferBody map[string]string
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &inferBody)
+		_, _ = w.Write([]byte(`{"mode":"svg","raw_svg":"<svg id='remix'></svg>","model_used":"org/model","backend_used":"pytorch-hf-transformers","device":"cuda","inference_ms":1}`))
+	}))
+	defer worker.Close()
+	rust := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"svg":"<svg id='final'></svg>","extracted_colors":["#fff"],"path_count":3,"byte_size":30,"processing_ms":3}`))
+	}))
+	defer rust.Close()
+
+	result, model, pipeline, warning := tryEditModel(
+		worker.Client(), rust.Client(), Config{MLWorkerURL: worker.URL, RustEngineURL: rust.URL},
+		EnhanceSvgRequest{
+			SVG: "<svg id='enhanced'></svg>", Mode: "ai-gradient-glow",
+			Instruction: "make it neon", Palette: []string{"#00F0FF"},
+			ModelID: "org/model", Pipeline: "direct-svg",
+		},
+		"<svg id='original'></svg>",
+	)
+	if model != "org/model" || pipeline != "direct-svg" || warning != "" {
+		t.Errorf("metadata = %q %q %q", model, pipeline, warning)
+	}
+	if result.SVG != "<svg id='final'></svg>" {
+		t.Errorf("svg = %q", result.SVG)
+	}
+	if !strings.Contains(inferBody["prompt"], "<svg id='original'></svg>") {
+		t.Errorf("prompt did not use the original SVG: %q", inferBody["prompt"])
+	}
+	if strings.Contains(inferBody["prompt"], "<svg id='enhanced'></svg>") {
+		t.Errorf("prompt leaked the enhanced SVG: %q", inferBody["prompt"])
+	}
+	if !strings.Contains(inferBody["prompt"], "make it neon") {
+		t.Errorf("prompt lost the instruction: %q", inferBody["prompt"])
+	}
+}
+
+func TestTryEditModelSupportsImageMode(t *testing.T) {
+	var vectorBody map[string]string
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"mode":"image","image_base64":"MODEL-IMAGE-B64","model_used":"org/model","backend_used":"pytorch-hf-diffusers","device":"cuda","inference_ms":1}`))
+	}))
+	defer worker.Close()
+	rust := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/vectorize" {
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &vectorBody)
+		}
+		_, _ = w.Write([]byte(`{"svg":"<svg id='final'></svg>","extracted_colors":[],"path_count":1,"byte_size":10,"processing_ms":2}`))
+	}))
+	defer rust.Close()
+
+	_, model, _, warning := tryEditModel(
+		worker.Client(), rust.Client(), Config{MLWorkerURL: worker.URL, RustEngineURL: rust.URL},
+		EnhanceSvgRequest{ModelID: "org/model", Pipeline: "diffusion-vtracer"},
+		"<svg></svg>",
+	)
+	if model != "org/model" || warning != "" {
+		t.Errorf("metadata = %q %q", model, warning)
+	}
+	if vectorBody["image_base64"] != "MODEL-IMAGE-B64" {
+		t.Errorf("vectorized wrong image: %+v", vectorBody)
+	}
+}

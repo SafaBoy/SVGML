@@ -91,6 +91,19 @@ func tryPhotoModel(inferenceClient, rustClient *http.Client, cfg Config, req Ima
 	return result, inferResp.ModelUsed, req.Pipeline, ""
 }
 
+func tryEditModel(inferenceClient, rustClient *http.Client, cfg Config, req EnhanceSvgRequest, originalSVG string) (RustSvgResponse, string, string, string) {
+	inferReq := buildEditModelInferRequest(req, originalSVG)
+	var inferResp MLInferResponse
+	if err := postJSON(inferenceClient, cfg.MLWorkerURL+"/infer", inferReq, &inferResp); err != nil {
+		return RustSvgResponse{}, "", "", modelFallbackWarning(req.ModelID, err.Error())
+	}
+	result, err := rustSVGFromModelOutput(rustClient, cfg.RustEngineURL, inferResp.Mode, inferResp.RawSVG, inferResp.ImageBase64, RustVectorizeRequest{})
+	if err != nil {
+		return RustSvgResponse{}, "", "", modelFallbackWarning(req.ModelID, err.Error())
+	}
+	return result, inferResp.ModelUsed, req.Pipeline, ""
+}
+
 func rustSVGFromModelOutput(client *http.Client, rustBaseURL, mode, rawSVG, imageBase64 string, vectorReq RustVectorizeRequest) (RustSvgResponse, error) {
 	switch mode {
 	case "svg":

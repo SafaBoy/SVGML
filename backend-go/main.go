@@ -783,6 +783,15 @@ func main() {
 			rustResp = nativeProcessSvg(procReq)
 		}
 
+		usedModel, usedPipeline, modelWarning := "", "", ""
+		if req.ModelID != "" {
+			modelResp, model, pipeline, warning := tryEditModel(inferenceClient, httpClient, cfg, req, req.SVG)
+			usedModel, usedPipeline, modelWarning = model, pipeline, warning
+			if usedModel != "" {
+				rustResp = modelResp
+			}
+		}
+
 		writeJSON(w, http.StatusOK, map[string]any{
 			"svg":              rustResp.SVG,
 			"extracted_colors": rustResp.ExtractedColors,
@@ -793,6 +802,9 @@ func main() {
 			"device":           mlResp.Device,
 			"inference_ms":     mlResp.InferenceMs,
 			"rust_process_ms":  rustResp.ProcessingMs,
+			"model_used":       usedModel,
+			"pipeline":         usedPipeline,
+			"model_warning":    modelWarning,
 		})
 	})
 
