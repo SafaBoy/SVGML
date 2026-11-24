@@ -26,12 +26,14 @@ type Config struct {
 	APIToken        string
 	AllowedOrigins  []string
 	RateLimitPerMin int
+	OllamaURL       string
 }
 
 type CuratedModel struct {
 	ID          string   `json:"id"`
 	Name        string   `json:"name"`
-	Pipeline    string   `json:"pipeline"` // "direct-svg", "diffusion-vtracer", "neural-vtracer"
+	Source      string   `json:"source,omitempty"` // "hf" (default) or "ollama"
+	Pipeline    string   `json:"pipeline"`         // "direct-svg", "diffusion-vtracer", "neural-vtracer"
 	Framework   string   `json:"framework"`
 	Description string   `json:"description"`
 	Tags        []string `json:"tags"`
@@ -381,7 +383,9 @@ func main() {
 		APIToken:        getEnv("SVGML_API_TOKEN", ""),
 		AllowedOrigins:  parseCSV(getEnv("CORS_ALLOWED_ORIGINS", "")),
 		RateLimitPerMin: parseIntEnv("RATE_LIMIT_PER_MIN", 60),
+		OllamaURL:       getEnv("OLLAMA_URL", "http://localhost:11434"),
 	}
+	setOllamaEnabled(getEnv("OLLAMA_ENABLED", "true") != "false")
 
 	var cleanup func()
 	if isSingleBinary {
