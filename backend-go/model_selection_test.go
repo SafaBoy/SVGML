@@ -89,6 +89,52 @@ func TestModelFallbackMetadataNeverClaimsTheRequestRan(t *testing.T) {
 	}
 }
 
+func TestTryPhotoModelReplacesSVGWhenModelRuns(t *testing.T) {
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/infer" {
+			t.Fatalf("worker path %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"mode":"svg","raw_svg":"<svg id='model'></svg>","model_used":"org/model","backend_used":"pytorch-hf-transformers","device":"cuda","inference_ms":1}`))
+	}))
+	defer worker.Close()
+	rust := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"svg":"<svg id='final'></svg>","extracted_colors":["#fff"],"path_count":2,"byte_size":20,"processing_ms":3}`))
+	}))
+	defer rust.Close()
+
+	cfg := Config{MLWorkerURL: worker.URL, RustEngineURL: rust.URL}
+	result, model, pipeline, warning := tryPhotoModel(
+		worker.Client(), rust.Client(), cfg,
+		ImageToSvgRequest{Filename: "cat.png", Mode: "colored-line-art", ModelID: "org/model", Pipeline: "direct-svg"},
+		[]string{"#111111"},
+	)
+	if model != "org/model" || pipeline != "direct-svg" || warning != "" {
+		t.Errorf("metadata = %q %q %q", model, pipeline, warning)
+	}
+	if result.SVG != "<svg id='final'></svg>" {
+		t.Errorf("svg = %q", result.SVG)
+	}
+}
+
+func TestTryPhotoModelKeepsFallbackOnWorker422(t *testing.T) {
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = w.Write([]byte(`{"detail":"org/model is not in the local Hugging Face cache"}`))
+	}))
+	defer worker.Close()
+
+	result, model, pipeline, warning := tryPhotoModel(
+		worker.Client(), worker.Client(), Config{MLWorkerURL: worker.URL},
+		ImageToSvgRequest{ModelID: "org/model", Pipeline: "direct-svg"}, nil,
+	)
+	if result.SVG != "" || model != "" || pipeline != "" {
+		t.Errorf("expected empty result, got %+v %q %q", result, model, pipeline)
+	}
+	if !strings.Contains(warning, "org/model") || !strings.Contains(warning, "422") {
+		t.Errorf("warning = %q", warning)
+	}
+}
+
 func TestRustSVGFromModelOutputVectorizesModelImage(t *testing.T) {
 	var vectorBody map[string]string
 	rust := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

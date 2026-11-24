@@ -73,6 +73,24 @@ func resolveModelMetadata(requestedModel, requestedPipeline, stableModel, stable
 	return stableModel, stablePipeline, modelFallbackWarning(requestedModel, reason), false
 }
 
+func tryPhotoModel(inferenceClient, rustClient *http.Client, cfg Config, req ImageToSvgRequest, fallbackColors []string) (RustSvgResponse, string, string, string) {
+	inferReq := buildPhotoModelInferRequest(req, fallbackColors)
+	var inferResp MLInferResponse
+	if err := postJSON(inferenceClient, cfg.MLWorkerURL+"/infer", inferReq, &inferResp); err != nil {
+		return RustSvgResponse{}, "", "", modelFallbackWarning(req.ModelID, err.Error())
+	}
+	vectorReq := RustVectorizeRequest{
+		ColorPrecision: req.ColorPrecision,
+		FilterSpeckle:  req.FilterSpeckle,
+		Palette:        req.Palette,
+	}
+	result, err := rustSVGFromModelOutput(rustClient, cfg.RustEngineURL, inferResp.Mode, inferResp.RawSVG, inferResp.ImageBase64, vectorReq)
+	if err != nil {
+		return RustSvgResponse{}, "", "", modelFallbackWarning(req.ModelID, err.Error())
+	}
+	return result, inferResp.ModelUsed, req.Pipeline, ""
+}
+
 func rustSVGFromModelOutput(client *http.Client, rustBaseURL, mode, rawSVG, imageBase64 string, vectorReq RustVectorizeRequest) (RustSvgResponse, error) {
 	switch mode {
 	case "svg":

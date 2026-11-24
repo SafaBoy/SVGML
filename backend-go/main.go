@@ -694,12 +694,23 @@ func main() {
 			}
 		}
 
+		modelID, pipeline, warning := "pytorch-lineart + rust-vtracer", "photo-lineart-vtracer", ""
+		if req.ModelID != "" {
+			modelResult, usedModel, usedPipeline, modelWarning := tryPhotoModel(inferenceClient, httpClient, cfg, req, rustResp.ExtractedColors)
+			modelID, pipeline, warning, _ = resolveModelMetadata(req.ModelID, usedPipeline, modelID, pipeline, usedModel, modelWarning)
+			if usedModel != "" {
+				rustResp = modelResult
+			}
+		}
+
 		item := GalleryItem{
 			ID:              fmt.Sprintf("svg-%d", time.Now().UnixNano()),
 			Prompt:          fmt.Sprintf("Photo (%s) → %s", req.Filename, req.Mode),
 			Style:           req.Mode,
-			ModelID:         "pytorch-lineart + rust-vtracer",
-			Pipeline:        "photo-lineart-vtracer",
+			ModelID:         modelID,
+			Pipeline:        pipeline,
+			Warning:         warning,
+			FallbackUsed:    warning != "",
 			BackendUsed:     mlResp.BackendUsed,
 			Device:          mlResp.Device,
 			SVG:             rustResp.SVG,
