@@ -38,6 +38,8 @@ type GalleryItem struct {
 	RustProcessMs   int64    `json:"rust_process_ms"`
 	TotalMs         int64    `json:"total_ms"`
 	CreatedAt       string   `json:"created_at"`
+	Warning         string   `json:"warning,omitempty"`
+	FallbackUsed    bool     `json:"fallback_used,omitempty"`
 }
 
 type GalleryStore struct {

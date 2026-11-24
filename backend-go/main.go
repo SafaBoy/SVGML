@@ -78,13 +78,21 @@ type MLInferRequest struct {
 }
 
 type MLInferResponse struct {
-	Mode        string `json:"mode"` // "svg" or "image"
-	RawSVG      string `json:"raw_svg,omitempty"`
-	ImageBase64 string `json:"image_base64,omitempty"`
-	ModelUsed   string `json:"model_used"`
-	BackendUsed string `json:"backend_used"`
-	Device      string `json:"device"`
-	InferenceMs int64  `json:"inference_ms"`
+	Mode           string `json:"mode"` // "svg" or "image"
+	RawSVG         string `json:"raw_svg,omitempty"`
+	ImageBase64    string `json:"image_base64,omitempty"`
+	ModelUsed      string `json:"model_used"`
+	BackendUsed    string `json:"backend_used"`
+	Device         string `json:"device"`
+	InferenceMs    int64  `json:"inference_ms"`
+	QualityWarning string `json:"quality_warning,omitempty"`
+}
+
+func fallbackWarning(stage, reason string) string {
+	if stage == "worker" {
+		return fmt.Sprintf("ML worker failed (%s); used the built-in procedural fallback.", reason)
+	}
+	return fmt.Sprintf("Rust engine failed (%s); used the built-in fallback.", reason)
 }
 
 type RustVectorizeRequest struct {
@@ -440,9 +448,15 @@ func main() {
 			Seed:           req.Seed,
 		}
 
+		warnings := []string{}
+		fallbackUsed := false
 		var mlResp MLInferResponse
 		if err := postJSON(httpClient, cfg.MLWorkerURL+"/infer", mlReq, &mlResp); err != nil {
+			warnings = append(warnings, fallbackWarning("worker", err.Error()))
+			fallbackUsed = true
 			mlResp = nativeMLInfer(mlReq)
+		} else if mlResp.QualityWarning != "" {
+			warnings = append(warnings, mlResp.QualityWarning)
 		}
 
 		// Step 2: Send ML output to Rust SVG & vtracer Engine (or native single-binary fallback)
@@ -455,6 +469,8 @@ func main() {
 				Palette:        req.Palette,
 			}
 			if err := postJSON(httpClient, cfg.RustEngineURL+"/vectorize", vecReq, &rustResp); err != nil {
+				warnings = append(warnings, fallbackWarning("rust", err.Error()))
+				fallbackUsed = true
 				var nErr error
 				rustResp, nErr = nativeVectorize(vecReq)
 				if nErr != nil {
@@ -470,6 +486,8 @@ func main() {
 				Optimize:    true,
 			}
 			if err := postJSON(httpClient, cfg.RustEngineURL+"/process-svg", procReq, &rustResp); err != nil {
+				warnings = append(warnings, fallbackWarning("rust", err.Error()))
+				fallbackUsed = true
 				rustResp = nativeProcessSvg(procReq)
 			}
 		}
@@ -490,6 +508,8 @@ func main() {
 			RustProcessMs:   rustResp.ProcessingMs,
 			TotalMs:         time.Since(totalStart).Milliseconds(),
 			CreatedAt:       time.Now().UTC().Format(time.RFC3339),
+			Warning:         strings.Join(warnings, "; "),
+			FallbackUsed:    fallbackUsed,
 		}
 
 		store.Add(item)
