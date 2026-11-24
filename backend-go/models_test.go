@@ -129,6 +129,13 @@ func TestFitGatingWithFourGBBudget(t *testing.T) {
 	}
 }
 
+func TestVRAMFitPreservesCPUFriendlyWhenBudgetUnknown(t *testing.T) {
+	got := applyVRAMFit(CuratedModel{ID: "small/model", CPUFriendly: true}, 1024*1024*1024, 0)
+	if !got.CPUFriendly {
+		t.Errorf("CPU-friendly flag was overwritten with no GPU budget: %+v", got)
+	}
+}
+
 func TestCuratedVerifiedAndFitMetadata(t *testing.T) {
 	byID := make(map[string]CuratedModel)
 	for _, m := range curatedModels {

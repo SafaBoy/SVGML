@@ -455,6 +455,7 @@ export default function App() {
     if (!prompt.trim()) return;
     setIsGenerating(true);
     setError(null);
+    setActiveItem((prev) => (prev ? { ...prev, warning: undefined } : prev));
     try {
       const parsedSeed = seedInput.trim() !== '' ? Number(seedInput.trim()) : undefined;
       const res = await apiFetch(`/api/generate`, {

@@ -119,7 +119,9 @@ func applyVRAMFit(m CuratedModel, totalBytes int64, budgetMB int) CuratedModel {
 		m.EstimatedVRAMMB = estimateVRAMMB(totalBytes)
 	}
 	m.FitsGPU = budgetMB > 0 && m.EstimatedVRAMMB > 0 && m.EstimatedVRAMMB <= budgetMB
-	m.CPUFriendly = m.FitsGPU
+	if budgetMB > 0 {
+		m.CPUFriendly = m.FitsGPU
+	}
 	if !m.FitsGPU && m.UnsupportedReason == "" {
 		switch {
 		case budgetMB <= 0:
