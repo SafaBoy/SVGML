@@ -158,6 +158,10 @@ class DownloadModelRequest(BaseModel):
     model_id: str
 
 
+class DeleteModelRequest(BaseModel):
+    model_id: str
+
+
 class ImageToLineArtRequest(BaseModel):
     image_base64: str
     mode: str = "colored-line-art"  # "colored-line-art" | "neon-line-art" | "ink-wash-vector" | "full-color-photo"
@@ -351,6 +355,84 @@ def models_status():
                 }
 
     return {"models": statuses}
+
+
+def evict_model(model_id: str) -> None:
+    """Drop all in-memory state for a model, matching repo IDs case-insensitively."""
+    target = (model_id or "").strip().lower()
+    if not target:
+        return
+    with DOWNLOAD_LOCK:
+        for cache in (LOADED_TEXT_MODELS, LOADED_VLM_MODELS, LOADED_DIFFUSION_MODELS,
+                      MODEL_DEVICE, MODEL_CONFIG_CACHE, DOWNLOAD_JOBS):
+            for key in [key for key in cache.keys() if str(key).lower() == target]:
+                cache.pop(key, None)
+
+
+def _scan_hf_cache():
+    if not HF_HUB_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Hugging Face cache is unavailable")
+    try:
+        return scan_cache_dir()
+    except Exception as exc:
+        logger.error("Failed to scan Hugging Face cache: %s", exc)
+        raise HTTPException(status_code=503, detail=f"Failed to scan HF cache: {exc}") from exc
+
+
+@app.post("/models/delete")
+def delete_model(req: DeleteModelRequest):
+    model_id = req.model_id.strip()
+    if not model_id:
+        raise HTTPException(status_code=400, detail="model_id is required")
+
+    cache_info = _scan_hf_cache()
+    target = model_id.lower()
+    repo = next(
+        (repo for repo in cache_info.repos if str(repo.repo_id).lower() == target),
+        None,
+    )
+    if repo is None:
+        raise HTTPException(status_code=404, detail=f"Model {model_id} is not in the HF cache")
+
+    hashes = [revision.commit_hash for revision in repo.revisions if revision.commit_hash]
+    freed_bytes = 0
+    if hashes:
+        result = cache_info.delete_revisions(*hashes)
+        freed_bytes = int(getattr(result, "freed_bytes", 0) or 0)
+    evict_model(model_id)
+    logger.info("Deleted HF model %s (%d revisions, %d bytes)", model_id, len(hashes), freed_bytes)
+    return {
+        "model_id": model_id,
+        "deleted_revisions": len(hashes),
+        "freed_bytes": freed_bytes,
+    }
+
+
+@app.post("/models/clear")
+def clear_models():
+    cache_info = _scan_hf_cache()
+    repos = list(cache_info.repos)
+    hashes = [
+        revision.commit_hash
+        for repo in repos
+        for revision in repo.revisions
+        if revision.commit_hash
+    ]
+    freed_bytes = 0
+    if hashes:
+        result = cache_info.delete_revisions(*hashes)
+        freed_bytes = int(getattr(result, "freed_bytes", 0) or 0)
+
+    with DOWNLOAD_LOCK:
+        LOADED_TEXT_MODELS.clear()
+        LOADED_VLM_MODELS.clear()
+        LOADED_DIFFUSION_MODELS.clear()
+        MODEL_DEVICE.clear()
+        MODEL_CONFIG_CACHE.clear()
+        DOWNLOAD_JOBS.clear()
+
+    logger.info("Cleared %d HF models (%d revisions, %d bytes)", len(repos), len(hashes), freed_bytes)
+    return {"deleted_models": len(repos), "freed_bytes": freed_bytes}
 
 
 @app.post("/models/download")
