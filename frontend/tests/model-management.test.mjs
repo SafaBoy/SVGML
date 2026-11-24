@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
 const session = readFileSync(new URL('../src/session.ts', import.meta.url), 'utf8');
 const types = readFileSync(new URL('../src/types.ts', import.meta.url), 'utf8');
+const readme = readFileSync(new URL('../../README.md', import.meta.url), 'utf8');
 
 const slice = (startMarker, endMarker) =>
   app.slice(app.indexOf(startMarker), app.indexOf(endMarker, app.indexOf(startMarker)));
@@ -48,4 +49,12 @@ test('delete requires confirmation and clear requires confirmation', () => {
 
 test('deleting the selected model resets selection', () => {
   assert.match(slice('const handleDeleteModel', 'const handleSelectModel'), /setSelectedModel\(DEFAULT_SESSION\.selectedModel\)/);
+});
+
+test('README documents external engines and cleanup controls', () => {
+  assert.match(readme, /OLLAMA_URL/);
+  assert.match(readme, /OLLAMA_ENABLED/);
+  assert.match(readme, /host\.docker\.internal/);
+  assert.match(readme, /host-gateway/);
+  assert.match(readme, /Clear all model files/);
 });

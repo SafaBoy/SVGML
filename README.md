@@ -83,6 +83,27 @@ See `.env.example` for a copy-pasteable set of defaults.
      `vtracer`. Fully local, no model download; the old `litert-vtracer` id is still accepted as an alias.
    - No LiteRT runtime or `.tflite` weights ship with this project — earlier versions implied one.
 
+## External Model Engines & Model Cleanup
+
+The studio can use models already served by an **existing Ollama** instance; it never installs,
+downloads, or starts an Ollama container. By default the gateway looks for Ollama at
+`OLLAMA_URL=http://localhost:11434` (local execution). Docker Compose overrides that with
+`http://host.docker.internal:11434` and maps `host.docker.internal:host-gateway` in the gateway
+service so Linux hosts are reachable; set `OLLAMA_URL` yourself if Ollama runs elsewhere.
+`OLLAMA_ENABLED=false` hides Ollama entirely.
+
+Open **HF Models → External Engines** to refresh discovery, enable/disable Ollama, and see its
+base URL, reachability and model count. Tags reported by Ollama `/api/tags` (for example
+`llama3.2:latest`) appear in the same model list used on Prompt, Photo→SVG and Edit SVG with an
+**Ollama** badge; selecting one switches the active engine for every creation page. If Ollama is
+unreachable, disabled, or generation fails, the request returns an explicit error — the gateway
+never substitutes a procedural or native result for a selected Ollama model.
+
+Model files are disk-space managed from the same Settings area. Ready models get a **Delete**
+button, and **Clear all model files** removes downloaded HF checkpoints and Ollama models after a
+confirmation prompt. Deleting the active model resets the studio selection. Cleanup never touches
+files outside the HF cache or the Ollama model store.
+
 ## Quick Start
 
 ### Option 1: Docker Compose (CPU out-of-the-box)
