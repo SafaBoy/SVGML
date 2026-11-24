@@ -47,6 +47,12 @@ import { createSamplePhotoDataUrl } from './samplePhoto';
 import type { CuratedModel, ModelStatus, GalleryItem } from './types';
 import { loadSession, saveSession, type SessionState } from './session';
 
+const PIPELINE_MODES = [
+  { id: 'direct-svg', title: 'Direct SVG LLM', sub: 'PyTorch + Rust XML' },
+  { id: 'diffusion-vtracer', title: 'Diffusion + vtracer', sub: 'PyTorch + Rust Trace' },
+  { id: 'neural-vtracer', title: 'Neural Raster', sub: 'PyTorch + Rust Trace' },
+] as const;
+
 export default function App() {
   const [initialSession] = useState(loadSession);
   const resolvedStudioMode =
@@ -133,7 +139,12 @@ export default function App() {
   const [lightCanvas, setLightCanvas] = useState(initialSession.lightCanvas);
   const [copied, setCopied] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [showAdvancedPipeline, setShowAdvancedPipeline] = useState(false);
   const [health, setHealth] = useState<any>(null);
+
+  // Derived from the selected model; neither value is persisted as a new session key.
+  const modelPipeline = models.find((m) => m.id === selectedModel)?.pipeline;
+  const manualPipelineOverride = pipeline !== modelPipeline;
 
   // The Prompt tab is a JSX branch, so ranking is computed at component scope.
   const rankedAddons = rankPromptAddons(prompt, style, pipeline);
@@ -353,6 +364,8 @@ export default function App() {
           filter_speckle: filterSpeckle,
           palette: customPalette,
           use_custom_palette: useCustomPaletteOnPhoto,
+          model_id: selectedModel,
+          pipeline,
         }),
       });
       const data = await res.json();
@@ -466,6 +479,87 @@ export default function App() {
     setSelectedModel(m.id);
     setPipeline(m.pipeline);
   };
+
+  const modelPicker = (() => {
+    const selectableModels = models.filter(
+      (m) =>
+        modelStatuses[m.id]?.status === 'ready' && !m.unsupported_reason && m.fits_gpu !== false
+    );
+    return (
+      <div className="space-y-2 rounded-xl border border-slate-700/60 bg-slate-900/70 p-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+            <Cpu className="w-3.5 h-3.5 text-cyan-400" />
+            Model
+          </span>
+          <span className="max-w-full truncate font-mono text-[10px] text-slate-500" title={selectedModel}>
+            {selectedModel}
+          </span>
+        </div>
+        {selectableModels.length === 0 ? (
+          <p className="text-xs text-amber-300">
+            No downloaded model is ready yet — download one in Settings.
+          </p>
+        ) : (
+          <div className="flex flex-wrap gap-1.5">
+            {selectableModels.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                aria-pressed={m.id === selectedModel}
+                title={m.id}
+                onClick={() => handleSelectModel(m)}
+                className={`min-h-[36px] text-xs px-2.5 py-1.5 rounded-lg border transition ${
+                  m.id === selectedModel
+                    ? 'bg-cyan-600/25 border-cyan-400 text-cyan-100'
+                    : 'bg-slate-800/80 border-slate-700/60 text-slate-300 hover:bg-slate-700'
+                }`}
+              >
+                {m.name}
+              </button>
+            ))}
+          </div>
+        )}
+        <p className="text-[11px] text-slate-500">
+          Pipeline: {modelPipeline || 'unknown'}
+          {manualPipelineOverride && <span className="text-amber-300"> · manual override</span>}
+        </p>
+      </div>
+    );
+  })();
+
+  const pipelineDisclosure = (() => (
+    <div className="space-y-2 pt-1">
+      <button
+        type="button"
+        aria-expanded={showAdvancedPipeline}
+        onClick={() => setShowAdvancedPipeline((open) => !open)}
+        className="inline-flex items-center gap-1.5 min-h-[36px] text-xs font-medium text-slate-400 hover:text-slate-200 transition"
+      >
+        <Layers className="w-3.5 h-3.5 text-indigo-400" />
+        Advanced: ML + Rust Pipeline
+      </button>
+      {showAdvancedPipeline && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          {PIPELINE_MODES.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => setPipeline(p.id as any)}
+              className={`min-h-[48px] p-2.5 rounded-xl border text-left transition ${
+                pipeline === p.id
+                  ? 'bg-indigo-600/20 border-indigo-500 text-white'
+                  : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700'
+              }`}
+            >
+              <div className="text-xs font-semibold">{p.title}</div>
+              <div className="text-[10px] opacity-75 mt-0.5">{p.sub}</div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  ))();
 
   const handleStyleChange = (presetId: string) => {
     setStyle(presetId);
@@ -662,6 +756,7 @@ export default function App() {
           palette: customPalette,
           intensity: enhanceIntensity,
           model_id: selectedModel,
+          pipeline,
         }),
       });
       const data = await res.json();
@@ -679,6 +774,10 @@ export default function App() {
         device: data.device || activeItem.device,
         inference_ms: data.inference_ms || 1,
         rust_process_ms: data.rust_process_ms || 1,
+        model_id: data.model_used || activeItem.model_id,
+        pipeline: data.pipeline || activeItem.pipeline,
+        warning: data.model_warning || undefined,
+        fallback_used: Boolean(data.model_warning),
       });
     } catch (err: any) {
       setError(err.message || 'Failed to enhance SVG with ML');
@@ -1698,6 +1797,8 @@ export default function App() {
                   </div>
                 )}
 
+                {modelPicker}
+
                 {/* Quick sample prompts */}
                 <div className="flex flex-wrap gap-1.5">
                   {SAMPLE_PROMPTS.map((sp, i) => (
@@ -1713,34 +1814,7 @@ export default function App() {
                   ))}
                 </div>
 
-                {/* Pipeline Mode Selector */}
-                <div className="space-y-2 pt-1">
-                  <label className="text-xs font-medium text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-                    <Layers className="w-3.5 h-3.5 text-indigo-400" />
-                    ML + Rust Pipeline Mode
-                  </label>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                    {[
-                      { id: 'direct-svg', title: 'Direct SVG LLM', sub: 'PyTorch + Rust XML' },
-                      { id: 'diffusion-vtracer', title: 'Diffusion + vtracer', sub: 'PyTorch + Rust Trace' },
-                      { id: 'neural-vtracer', title: 'Neural Raster', sub: 'PyTorch + Rust Trace' },
-                    ].map((p) => (
-                      <button
-                        key={p.id}
-                        type="button"
-                        onClick={() => setPipeline(p.id as any)}
-                        className={`min-h-[48px] p-2.5 rounded-xl border text-left transition ${
-                          pipeline === p.id
-                            ? 'bg-indigo-600/20 border-indigo-500 text-white'
-                            : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700'
-                        }`}
-                      >
-                        <div className="text-xs font-semibold">{p.title}</div>
-                        <div className="text-[10px] opacity-75 mt-0.5">{p.sub}</div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                {pipelineDisclosure}
 
                 {/* Session-only generated images */}
                 <div className="space-y-2 pt-2 border-t border-slate-800/80">
@@ -1861,6 +1935,9 @@ export default function App() {
                     </div>
                   </div>
                 </div>
+
+                {modelPicker}
+                {pipelineDisclosure}
 
                 {/* Line-Art Vector Mode Selector */}
                 <div className="space-y-2">
@@ -2193,6 +2270,9 @@ export default function App() {
                     </div>
                   </div>
                 </div>
+
+                {modelPicker}
+                {pipelineDisclosure}
 
                 {/* 3. ML / PyTorch CUDA SVG Transform & Enhance */}
                 <div className="p-3 rounded-xl bg-slate-950/90 border border-emerald-500/30 space-y-3">
