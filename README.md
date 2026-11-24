@@ -101,7 +101,10 @@ downloaded are available immediately. Set `HF_CACHE_DIR=/some/other/cache` to po
 
 If the images are already built and you only need to start the stack, use
 `./scripts/start-docker-gpu.sh` instead of `run.sh --gpu`. It applies the GPU override and the same
-host HF cache but runs `up -d --no-build`, so no container image is rebuilt.
+host HF cache but runs `up -d --no-build`, so no container image is rebuilt. If any image is missing,
+it fails before starting anything and lists what is missing; pass `--build-missing` to build only
+those services (for example `./scripts/start-docker-gpu.sh --build-missing`) while reusing the rest.
+Building the ML worker pulls a large (~11.5 GB) image, so check free disk space first.
 
 During a fresh download the model hub's progress bar advances with transferred bytes on each status
 poll (every 1.5 s) instead of jumping once per file; cached checkpoints are credited in full.
