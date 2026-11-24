@@ -58,6 +58,10 @@ services:
       - SVGML_API_TOKEN=${SVGML_API_TOKEN:-}
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-}
       - RATE_LIMIT_PER_MIN=${RATE_LIMIT_PER_MIN:-60}
+      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
+      - OLLAMA_ENABLED=${OLLAMA_ENABLED:-true}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - gallery_data:/app/data
     expose:

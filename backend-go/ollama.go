@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -214,4 +216,62 @@ func extractOllamaSVG(text string) string {
 		return trimmed[start : end+len("</svg>")]
 	}
 	return ""
+}
+
+func ollamaDeleteModel(client *http.Client, baseURL, modelID string) error {
+	if !getOllamaEnabled() {
+		return fmt.Errorf("Ollama is disabled")
+	}
+	body, err := json.Marshal(map[string]string{"name": modelID})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodDelete, strings.TrimRight(baseURL, "/")+"/api/delete", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	bounded := *client
+	bounded.Timeout = 30 * time.Second
+	resp, err := bounded.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		msg, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("ollama delete returned %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+	}
+	return nil
+}
+
+func ollamaClearModels(client *http.Client, baseURL string) (int, error) {
+	if !getOllamaEnabled() {
+		return 0, fmt.Errorf("Ollama is disabled")
+	}
+	tags, err := ollamaListModels(client, baseURL)
+	if err != nil {
+		return 0, err
+	}
+	seen := map[string]bool{}
+	deleted := 0
+	var firstErr error
+	for _, tag := range tags {
+		name := tag.Name
+		if name == "" {
+			name = tag.Model
+		}
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		if err := ollamaDeleteModel(client, baseURL, name); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		deleted++
+	}
+	return deleted, firstErr
 }

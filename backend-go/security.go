@@ -26,6 +26,8 @@ var expensiveRoutes = map[string]bool{
 	"/api/svg/enhance":     true,
 	"/api/models/download": true,
 	"/api/models/search":   true,
+	"/api/models/delete":   true,
+	"/api/models/clear":    true,
 }
 
 // bodyLimits caps request bodies per route. Anything not listed falls back to
@@ -34,6 +36,8 @@ var bodyLimits = map[string]int64{
 	"/api/generate":        1 << 20,
 	"/api/models/download": 1 << 20,
 	"/api/models/search":   1 << 20,
+	"/api/models/delete":   1 << 20,
+	"/api/models/clear":    1 << 20,
 	"/api/svg/recolor":     8 << 20,
 	"/api/svg/enhance":     8 << 20,
 	"/api/gallery":         8 << 20,

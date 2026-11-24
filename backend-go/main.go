@@ -545,6 +545,99 @@ func main() {
 		writeJSON(w, http.StatusOK, out)
 	})
 
+	// Delete one downloaded model from the selected engine's cache.
+	mux.HandleFunc("/api/models/delete", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "POST required")
+			return
+		}
+		var payload struct {
+			ModelID string `json:"model_id"`
+			Source  string `json:"source"`
+		}
+		if !decodeJSONBody(w, r, &payload, "Invalid JSON: ") {
+			return
+		}
+		modelID := strings.TrimSpace(payload.ModelID)
+		source := strings.ToLower(strings.TrimSpace(payload.Source))
+		if modelID == "" || (source != "hf" && source != "ollama") {
+			writeError(w, http.StatusBadRequest, "model_id and source ('hf' or 'ollama') are required")
+			return
+		}
+		switch source {
+		case "hf":
+			var out map[string]any
+			if err := postJSON(httpClient, cfg.MLWorkerURL+"/models/delete", map[string]string{"model_id": modelID}, &out); err != nil {
+				writeError(w, workerErrorStatus(err), "Model cleanup failed: "+err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, out)
+		case "ollama":
+			if err := ollamaDeleteModel(httpClient, cfg.OllamaURL, modelID); err != nil {
+				writeError(w, workerErrorStatus(err), "Ollama cleanup failed: "+err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"deleted": modelID, "source": "ollama"})
+		}
+	})
+
+	// Clear downloaded models from one or both engines.
+	mux.HandleFunc("/api/models/clear", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "POST required")
+			return
+		}
+		var payload struct {
+			Sources []string `json:"sources"`
+		}
+		if !decodeJSONBody(w, r, &payload, "Invalid JSON: ") {
+			return
+		}
+		sources := payload.Sources
+		if len(sources) == 0 {
+			sources = []string{"hf", "ollama"}
+		}
+		selected := map[string]bool{}
+		for _, source := range sources {
+			source = strings.ToLower(strings.TrimSpace(source))
+			if source != "hf" && source != "ollama" {
+				writeError(w, http.StatusBadRequest, "sources must contain only 'hf' and/or 'ollama'")
+				return
+			}
+			selected[source] = true
+		}
+		result := map[string]any{"sources": sources, "ollama_deleted": 0}
+		errorsBySource := map[string]string{}
+		if selected["hf"] {
+			var out map[string]any
+			if err := postJSON(httpClient, cfg.MLWorkerURL+"/models/clear", map[string]any{}, &out); err != nil {
+				errorsBySource["hf"] = err.Error()
+			} else {
+				result["hf"] = out
+			}
+		}
+		if selected["ollama"] {
+			deleted, err := ollamaClearModels(httpClient, cfg.OllamaURL)
+			if err != nil {
+				errorsBySource["ollama"] = err.Error()
+			} else {
+				result["ollama_deleted"] = deleted
+			}
+		}
+		if len(errorsBySource) > 0 {
+			result["errors"] = errorsBySource
+		}
+		if len(errorsBySource) == len(selected) {
+			messages := make([]string, 0, len(errorsBySource))
+			for _, msg := range errorsBySource {
+				messages = append(messages, msg)
+			}
+			writeError(w, http.StatusServiceUnavailable, "All model cleanups failed: "+strings.Join(messages, "; "))
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	})
+
 	// Live Hugging Face Hub search endpoint
 	mux.HandleFunc("/api/models/search", func(w http.ResponseWriter, r *http.Request) {
 		query := strings.TrimSpace(r.URL.Query().Get("q"))
@@ -1071,6 +1164,20 @@ func postJSON(client *http.Client, targetURL string, payload any, out any) error
 		return fmt.Errorf("status %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func workerErrorStatus(err error) int {
+	msg := err.Error()
+	if strings.Contains(msg, "status 400") || strings.Contains(msg, "returned 400") {
+		return http.StatusBadRequest
+	}
+	if strings.Contains(msg, "status 404") || strings.Contains(msg, "returned 404") {
+		return http.StatusNotFound
+	}
+	if strings.Contains(msg, "status 503") || strings.Contains(msg, "returned 503") {
+		return http.StatusServiceUnavailable
+	}
+	return http.StatusServiceUnavailable
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {

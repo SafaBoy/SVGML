@@ -284,6 +284,17 @@ func TestSecurityHeadersMiddleware(t *testing.T) {
 	}
 }
 
+func TestCleanupRoutesAreRateLimitedAndBodyCapped(t *testing.T) {
+	for _, path := range []string{"/api/models/delete", "/api/models/clear"} {
+		if !expensiveRoutes[path] {
+			t.Errorf("%s must consume rate-limit budget", path)
+		}
+		if got := bodyLimits[path]; got != 1<<20 {
+			t.Errorf("%s body limit = %d, want 1 MiB", path, got)
+		}
+	}
+}
+
 func TestParseCSVAndIntEnv(t *testing.T) {
 	if got := parseCSV(" http://a , ,http://b "); len(got) != 2 || got[0] != "http://a" || got[1] != "http://b" {
 		t.Fatalf("parseCSV = %#v", got)

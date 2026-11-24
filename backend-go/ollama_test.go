@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -354,5 +355,109 @@ func TestTryPhotoModelOllamaFailureReturnsError(t *testing.T) {
 	}
 	if result.SVG != "" || model != "" || pipeline != "" || warning != "" {
 		t.Errorf("failure returned fallback metadata: %+v %q %q %q", result, model, pipeline, warning)
+	}
+}
+
+func ollamaCleanupServer(t *testing.T, tags string, deleteHandler http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tags":
+			if r.Method != http.MethodGet {
+				t.Errorf("unexpected tags method: %s", r.Method)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(tags))
+		case "/api/delete":
+			if r.Method != http.MethodDelete {
+				t.Errorf("unexpected delete method: %s", r.Method)
+			}
+			deleteHandler(w, r)
+		default:
+			t.Errorf("unexpected ollama request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+}
+
+func TestOllamaDeleteModelSendsName(t *testing.T) {
+	var body map[string]string
+	server := ollamaCleanupServer(t, "", func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode delete body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	defer server.Close()
+	setOllamaEnabled(true)
+	defer setOllamaEnabled(true)
+
+	if err := ollamaDeleteModel(server.Client(), server.URL, "llama3.2:latest"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if body["name"] != "llama3.2:latest" {
+		t.Fatalf("delete body = %#v, want model name", body)
+	}
+}
+
+func TestOllamaDeleteModelReportsHTTPFailure(t *testing.T) {
+	server := ollamaCleanupServer(t, "", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("boom"))
+	})
+	defer server.Close()
+	setOllamaEnabled(true)
+	defer setOllamaEnabled(true)
+
+	err := ollamaDeleteModel(server.Client(), server.URL, "llama3.2:latest")
+	if err == nil || !strings.Contains(err.Error(), "500") || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("error = %v, want status and body", err)
+	}
+}
+
+func TestOllamaClearModelsDeletesEveryTag(t *testing.T) {
+	deleted := []string{}
+	server := ollamaCleanupServer(t,
+		`{"models":[{"name":"llama3.2:latest"},{"name":"qwen2.5:latest"},{"name":"qwen2.5:latest"}]}`,
+		func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode delete body: %v", err)
+			}
+			deleted = append(deleted, body["name"])
+			w.WriteHeader(http.StatusOK)
+		},
+	)
+	defer server.Close()
+	setOllamaEnabled(true)
+	defer setOllamaEnabled(true)
+
+	n, err := ollamaClearModels(server.Client(), server.URL)
+	if err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("deleted %d models, want 2", n)
+	}
+	if len(deleted) != 2 || deleted[0] != "llama3.2:latest" || deleted[1] != "qwen2.5:latest" {
+		t.Fatalf("deleted = %#v, want each distinct tag once", deleted)
+	}
+}
+
+func TestWorkerErrorStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"not found", errors.New("status 404: model not cached"), http.StatusNotFound},
+		{"bad request", errors.New("status 400: model_id required"), http.StatusBadRequest},
+		{"ollama missing", errors.New("ollama delete returned 404: model not found"), http.StatusNotFound},
+		{"worker down", errors.New("dial tcp: connection refused"), http.StatusServiceUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := workerErrorStatus(tc.err); got != tc.want {
+				t.Fatalf("status = %d, want %d", got, tc.want)
+			}
+		})
 	}
 }
