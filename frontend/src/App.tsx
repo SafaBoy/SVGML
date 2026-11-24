@@ -45,7 +45,15 @@ import { loadSession, saveSession, type SessionState } from './session';
 
 export default function App() {
   const [initialSession] = useState(loadSession);
-  const [studioMode, setStudioMode] = useState<'text' | 'photo' | 'editor'>(initialSession.studioMode);
+  const resolvedStudioMode =
+    initialSession.mobileSection === 'create'
+      ? 'text'
+      : initialSession.mobileSection === 'photo'
+        ? 'photo'
+        : initialSession.mobileSection === 'editor'
+          ? 'editor'
+          : initialSession.studioMode;
+  const [studioMode, setStudioMode] = useState<'text' | 'photo' | 'editor'>(resolvedStudioMode);
   const [prompt, setPrompt] = useState(initialSession.prompt);
   const [style, setStyle] = useState(initialSession.style);
   const [customPalette, setCustomPalette] = useState<string[]>(initialSession.customPalette);
@@ -1215,6 +1223,7 @@ export default function App() {
               key={item.id}
               onClick={() => {
                 setActiveItem(item);
+                setStudioMode('text');
                 setMobileSection('create');
               }}
               className={`group relative rounded-xl border p-2.5 cursor-pointer transition flex flex-col gap-2 ${
@@ -1452,6 +1461,11 @@ export default function App() {
       <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 py-4 sm:py-6">
         {mobileSection === 'settings' ? (
           <div className="w-full grid grid-cols-1 xl:grid-cols-2 gap-5 items-start">
+            {error && (
+              <div className="col-span-full p-3 rounded-xl bg-rose-950/60 border border-rose-700 text-rose-200 text-xs">
+                {error}
+              </div>
+            )}
             <div className="space-y-5">
               {modelHubCard}
               <div className="p-4 sm:p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl space-y-3">

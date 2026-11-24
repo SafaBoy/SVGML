@@ -42,3 +42,27 @@ test('Gallery is its own page and deletion clears the session copy', () => {
   assert.match(app, /mobileSection === 'gallery'/);
   assert.match(app, /setSessionImages\(\(prev\) => prev\.filter\(/);
 });
+
+test('Settings surfaces errors raised by its own actions', () => {
+  const settingsStart = app.indexOf("mobileSection === 'settings' ? (");
+  const settingsEnd = app.indexOf(") : mobileSection === 'gallery' ? (", settingsStart);
+  assert.ok(settingsStart > -1 && settingsEnd > settingsStart, 'Settings branch not found');
+  assert.match(app.slice(settingsStart, settingsEnd), /\{error && \(/);
+});
+
+test('Gallery inspection switches to Prompt mode and its session strip', () => {
+  const galleryStart = app.indexOf('const galleryCard = (');
+  const galleryEnd = app.indexOf('const activeModelStatus', galleryStart);
+  assert.match(
+    app.slice(galleryStart, galleryEnd),
+    /setActiveItem\(item\);\s*setStudioMode\('text'\);\s*setMobileSection\('create'\)/
+  );
+});
+
+test('a legacy persisted section does not leave studio mode out of sync', () => {
+  assert.match(
+    app,
+    /const resolvedStudioMode =[\s\S]{0,320}initialSession\.mobileSection === 'create'[\s\S]{0,320}initialSession\.studioMode/
+  );
+  assert.match(app, /useState<'text' \| 'photo' \| 'editor'>\(resolvedStudioMode\)/);
+});
