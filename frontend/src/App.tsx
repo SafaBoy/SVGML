@@ -114,9 +114,9 @@ export default function App() {
 
   const [viewMode, setViewMode] = useState<'preview' | 'split' | 'code'>(initialSession.viewMode);
   const [mobileSection, setMobileSection] = useState<
-    'create' | 'photo' | 'editor' | 'canvas' | 'models' | 'gallery'
+    'create' | 'photo' | 'editor' | 'settings' | 'gallery'
   >(initialSession.mobileSection);
-  const [lightCanvas, setLightCanvas] = useState(false);
+  const [lightCanvas, setLightCanvas] = useState(initialSession.lightCanvas);
   const [copied, setCopied] = useState(false);
   const [health, setHealth] = useState<any>(null);
 
@@ -166,6 +166,7 @@ export default function App() {
       seedInput,
       showModelParams,
       viewMode,
+      lightCanvas,
     };
     const serialized = JSON.stringify(next);
     if (serialized === lastSaved.current) return;
@@ -206,6 +207,7 @@ export default function App() {
     seedInput,
     showModelParams,
     viewMode,
+    lightCanvas,
   ]);
 
   useEffect(() => {
@@ -335,7 +337,7 @@ export default function App() {
       }
       setActiveItem(data);
       setGallery((prev) => [data, ...prev.filter((i) => i.id !== data.id)]);
-      setMobileSection('canvas');
+      setMobileSection('create');
       fetchHealth();
     } catch (err: any) {
       setError(err.message || 'Failed to convert photo to SVG');
@@ -485,7 +487,7 @@ export default function App() {
       }
       setActiveItem(data);
       setGallery((prev) => [data, ...prev.filter((i) => i.id !== data.id)]);
-      setMobileSection('canvas');
+      setMobileSection('create');
       fetchModelStatuses();
       fetchHealth();
     } catch (err: any) {
@@ -928,13 +930,13 @@ export default function App() {
               id: 'canvas',
               label: 'Canvas',
               icon: Download,
-              onClick: () => setMobileSection('canvas'),
+              onClick: () => setMobileSection('create'),
             },
             {
               id: 'models',
               label: 'HF Models',
               icon: CloudDownload,
-              onClick: () => setMobileSection('models'),
+              onClick: () => setMobileSection('settings'),
             },
             {
               id: 'gallery',
@@ -946,7 +948,7 @@ export default function App() {
             const Icon = item.icon;
             const active =
               mobileSection === item.id ||
-              (item.id === 'editor' && studioMode === 'editor' && mobileSection !== 'models');
+              (item.id === 'editor' && studioMode === 'editor' && mobileSection !== 'settings');
             return (
               <button
                 key={item.id}
@@ -975,7 +977,7 @@ export default function App() {
             mobileSection === 'create' ||
             mobileSection === 'photo' ||
             mobileSection === 'editor' ||
-            mobileSection === 'models'
+            mobileSection === 'settings'
               ? 'block'
               : 'hidden lg:block'
           }`}
@@ -983,7 +985,7 @@ export default function App() {
           {/* Creation & Editing Studio Card (Text-to-SVG, Photo-to-LineArt & SVG Editor Switcher) */}
           <div
             className={`p-4 sm:p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl space-y-4 ${
-              mobileSection === 'models' ? 'hidden lg:block' : 'block'
+              mobileSection === 'settings' ? 'hidden lg:block' : 'block'
             }`}
           >
             {/* Studio Mode Switcher Tabs (3 Modes) */}
@@ -2055,9 +2057,8 @@ export default function App() {
         {/* Right Canvas & Inspector Column */}
         <section
           className={`lg:col-span-7 flex flex-col gap-5 ${
-            mobileSection === 'canvas' ||
-            mobileSection === 'gallery' ||
             mobileSection === 'create' ||
+            mobileSection === 'gallery' ||
             mobileSection === 'photo' ||
             mobileSection === 'editor'
               ? 'block'
@@ -2242,7 +2243,7 @@ export default function App() {
           {/* Generation History Gallery with Direct Download Buttons on Every Card */}
           <div
             className={`p-4 sm:p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl space-y-3 ${
-              mobileSection === 'canvas' ? 'hidden lg:block' : 'block'
+              mobileSection === 'create' ? 'hidden lg:block' : 'block'
             }`}
           >
             <div className="flex items-center justify-between">
@@ -2265,7 +2266,7 @@ export default function App() {
                     onClick={() => {
                       setActiveItem(item);
                       if (window.innerWidth < 1024) {
-                        setMobileSection('canvas');
+                        setMobileSection('create');
                       }
                     }}
                     className={`group relative rounded-xl border p-2.5 cursor-pointer transition flex flex-col gap-2 ${

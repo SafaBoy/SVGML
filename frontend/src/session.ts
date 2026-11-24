@@ -3,7 +3,7 @@ import { SAMPLE_PROMPTS, STYLE_PRESETS, SYSTEM_PROMPT_PRESETS } from './presets'
 export const SESSION_KEY = 'svgml.session.v1';
 
 type StudioMode = 'text' | 'photo' | 'editor';
-type MobileSection = 'create' | 'photo' | 'editor' | 'canvas' | 'models' | 'gallery';
+type MobileSection = 'create' | 'photo' | 'editor' | 'settings' | 'gallery';
 type Pipeline = 'direct-svg' | 'diffusion-vtracer' | 'neural-vtracer';
 type ViewMode = 'preview' | 'split' | 'code';
 
@@ -39,6 +39,7 @@ export interface SessionState {
   seedInput: string;
   showModelParams: boolean;
   viewMode: ViewMode;
+  lightCanvas: boolean;
 }
 
 export const DEFAULT_SESSION: SessionState = {
@@ -73,6 +74,7 @@ export const DEFAULT_SESSION: SessionState = {
   seedInput: '',
   showModelParams: true,
   viewMode: 'preview',
+  lightCanvas: false,
 };
 
 const oneOf =
@@ -109,7 +111,7 @@ const strArray =
 const validators: { [K in keyof SessionState]: (value: unknown) => SessionState[K] } = {
   studioMode: oneOf<StudioMode>(['text', 'photo', 'editor'], 'text'),
   mobileSection: oneOf<MobileSection>(
-    ['create', 'photo', 'editor', 'canvas', 'models', 'gallery'],
+    ['create', 'photo', 'editor', 'settings', 'gallery'],
     'create'
   ),
   prompt: str(DEFAULT_SESSION.prompt),
@@ -144,6 +146,7 @@ const validators: { [K in keyof SessionState]: (value: unknown) => SessionState[
   seedInput: str(''),
   showModelParams: bool(true),
   viewMode: oneOf<ViewMode>(['preview', 'split', 'code'], 'preview'),
+  lightCanvas: bool(false),
 };
 
 function defaults(): SessionState {
