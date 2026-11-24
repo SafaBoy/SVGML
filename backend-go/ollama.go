@@ -141,3 +141,77 @@ func ollamaDiagnostics(client *http.Client, cfg Config, models []CuratedModel) m
 		"model_count": len(models),
 	}
 }
+
+func ollamaInfer(client *http.Client, cfg Config, modelID, prompt string, maxTokens int, temperature float64) (MLInferResponse, error) {
+	start := time.Now()
+	if !getOllamaEnabled() {
+		return MLInferResponse{}, fmt.Errorf("Ollama is disabled")
+	}
+	tags, err := ollamaListModels(client, cfg.OllamaURL)
+	if err != nil {
+		return MLInferResponse{}, err
+	}
+	available := false
+	for _, tag := range tags {
+		if tag.Name == modelID || tag.Model == modelID {
+			available = true
+			break
+		}
+	}
+	if !available {
+		return MLInferResponse{}, fmt.Errorf("model %q is not available in Ollama", modelID)
+	}
+
+	payload := map[string]any{
+		"model":  modelID,
+		"prompt": prompt,
+		"stream": false,
+		"format": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"svg": map[string]any{"type": "string"},
+			},
+			"required": []string{"svg"},
+		},
+		"options": map[string]any{
+			"temperature": temperature,
+			"num_predict": maxTokens,
+		},
+	}
+	inferClient := *client
+	inferClient.Timeout = 5 * time.Minute
+	var generated struct {
+		Response string `json:"response"`
+	}
+	if err := postJSON(&inferClient, strings.TrimRight(cfg.OllamaURL, "/")+"/api/generate", payload, &generated); err != nil {
+		return MLInferResponse{}, fmt.Errorf("ollama generate: %w", err)
+	}
+	svg := extractOllamaSVG(generated.Response)
+	if svg == "" {
+		return MLInferResponse{}, fmt.Errorf("ollama model %q returned no SVG", modelID)
+	}
+	return MLInferResponse{
+		Mode:        "svg",
+		RawSVG:      svg,
+		ModelUsed:   modelID,
+		BackendUsed: "ollama",
+		Device:      "ollama",
+		InferenceMs: time.Since(start).Milliseconds(),
+	}, nil
+}
+
+func extractOllamaSVG(text string) string {
+	trimmed := strings.TrimSpace(text)
+	var payload struct {
+		SVG string `json:"svg"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &payload); err == nil && strings.TrimSpace(payload.SVG) != "" {
+		return strings.TrimSpace(payload.SVG)
+	}
+	start := strings.Index(trimmed, "<svg")
+	end := strings.Index(trimmed, "</svg>")
+	if start >= 0 && end > start {
+		return trimmed[start : end+len("</svg>")]
+	}
+	return ""
+}

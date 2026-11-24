@@ -103,11 +103,14 @@ func TestTryPhotoModelReplacesSVGWhenModelRuns(t *testing.T) {
 	defer rust.Close()
 
 	cfg := Config{MLWorkerURL: worker.URL, RustEngineURL: rust.URL}
-	result, model, pipeline, warning := tryPhotoModel(
+	result, model, pipeline, warning, err := tryPhotoModel(
 		worker.Client(), rust.Client(), cfg,
 		ImageToSvgRequest{Filename: "cat.png", Mode: "colored-line-art", ModelID: "org/model", Pipeline: "direct-svg"},
 		[]string{"#111111"},
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if model != "org/model" || pipeline != "direct-svg" || warning != "" {
 		t.Errorf("metadata = %q %q %q", model, pipeline, warning)
 	}
@@ -123,10 +126,13 @@ func TestTryPhotoModelKeepsFallbackOnWorker422(t *testing.T) {
 	}))
 	defer worker.Close()
 
-	result, model, pipeline, warning := tryPhotoModel(
+	result, model, pipeline, warning, err := tryPhotoModel(
 		worker.Client(), worker.Client(), Config{MLWorkerURL: worker.URL},
 		ImageToSvgRequest{ModelID: "org/model", Pipeline: "direct-svg"}, nil,
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if result.SVG != "" || model != "" || pipeline != "" {
 		t.Errorf("expected empty result, got %+v %q %q", result, model, pipeline)
 	}
@@ -181,7 +187,7 @@ func TestTryEditModelUsesOriginalSVGAndEnhanceInstruction(t *testing.T) {
 	}))
 	defer rust.Close()
 
-	result, model, pipeline, warning := tryEditModel(
+	result, model, pipeline, warning, err := tryEditModel(
 		worker.Client(), rust.Client(), Config{MLWorkerURL: worker.URL, RustEngineURL: rust.URL},
 		EnhanceSvgRequest{
 			SVG: "<svg id='enhanced'></svg>", Mode: "ai-gradient-glow",
@@ -190,6 +196,9 @@ func TestTryEditModelUsesOriginalSVGAndEnhanceInstruction(t *testing.T) {
 		},
 		"<svg id='original'></svg>",
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if model != "org/model" || pipeline != "direct-svg" || warning != "" {
 		t.Errorf("metadata = %q %q %q", model, pipeline, warning)
 	}
@@ -222,11 +231,14 @@ func TestTryEditModelSupportsImageMode(t *testing.T) {
 	}))
 	defer rust.Close()
 
-	_, model, _, warning := tryEditModel(
+	_, model, _, warning, err := tryEditModel(
 		worker.Client(), rust.Client(), Config{MLWorkerURL: worker.URL, RustEngineURL: rust.URL},
 		EnhanceSvgRequest{ModelID: "org/model", Pipeline: "diffusion-vtracer"},
 		"<svg></svg>",
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if model != "org/model" || warning != "" {
 		t.Errorf("metadata = %q %q", model, warning)
 	}

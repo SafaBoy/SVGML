@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -156,5 +158,201 @@ func TestStatusMergeKeepsWorkerModels(t *testing.T) {
 	}
 	if len(base["models"].(map[string]any)) != 2 {
 		t.Errorf("worker payload = %+v", base)
+	}
+}
+
+func ollamaStubServer(t *testing.T, tags string, generate http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tags":
+			if r.Method != http.MethodGet {
+				t.Errorf("unexpected tags method: %s", r.Method)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(tags))
+		case "/api/generate":
+			if r.Method != http.MethodPost {
+				t.Errorf("unexpected generate method: %s", r.Method)
+			}
+			generate(w, r)
+		default:
+			t.Errorf("unexpected ollama request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+}
+
+const ollamaTagsBody = `{"models":[{"name":"llama3.2:latest","model":"llama3.2:latest","size":2097152,"details":{"family":"llama"}}]}`
+
+func TestOllamaInferReturnsSVG(t *testing.T) {
+	var body map[string]any
+	server := ollamaStubServer(t, ollamaTagsBody, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode generate body: %v", err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"response":"{\"svg\":\"<svg/>\"}"}`))
+	})
+	defer server.Close()
+	setOllamaEnabled(true)
+	defer setOllamaEnabled(true)
+
+	resp, err := ollamaInfer(server.Client(), Config{OllamaURL: server.URL}, "llama3.2:latest", "make an icon", 512, 0.2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Mode != "svg" || resp.RawSVG != "<svg/>" || resp.ModelUsed != "llama3.2:latest" || resp.BackendUsed != "ollama" || resp.Device != "ollama" {
+		t.Errorf("infer response = %+v", resp)
+	}
+	if body["model"] != "llama3.2:latest" || body["stream"] != false {
+		t.Errorf("generate request = %+v", body)
+	}
+	format, ok := body["format"].(map[string]any)
+	if !ok || format["type"] != "object" {
+		t.Fatalf("format = %+v", body["format"])
+	}
+	props, ok := format["properties"].(map[string]any)
+	if !ok || props["svg"] == nil {
+		t.Errorf("format properties = %+v", format)
+	}
+	options, ok := body["options"].(map[string]any)
+	if !ok || options["num_predict"] != float64(512) || options["temperature"] != 0.2 {
+		t.Errorf("options = %+v", body["options"])
+	}
+}
+
+func TestOllamaInferExtractsRawMarkup(t *testing.T) {
+	server := ollamaStubServer(t, ollamaTagsBody, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"response":"prefix <svg viewBox='0 0 1 1'></svg> suffix"}`))
+	})
+	defer server.Close()
+	setOllamaEnabled(true)
+	defer setOllamaEnabled(true)
+
+	resp, err := ollamaInfer(server.Client(), Config{OllamaURL: server.URL}, "llama3.2:latest", "make an icon", 512, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.RawSVG != `<svg viewBox='0 0 1 1'></svg>` {
+		t.Errorf("raw svg = %q", resp.RawSVG)
+	}
+}
+
+func TestOllamaInferRejectsUnknownModel(t *testing.T) {
+	server := ollamaStubServer(t, ollamaTagsBody, func(w http.ResponseWriter, r *http.Request) {
+		t.Error("generate must not be called for an unknown model")
+	})
+	defer server.Close()
+	setOllamaEnabled(true)
+	defer setOllamaEnabled(true)
+
+	_, err := ollamaInfer(server.Client(), Config{OllamaURL: server.URL}, "missing/model", "make an icon", 512, 0)
+	if err == nil || !strings.Contains(err.Error(), "missing/model") {
+		t.Errorf("error = %v, want unknown-model error naming the ID", err)
+	}
+}
+
+func TestOllamaInferRejectsHTTPFailure(t *testing.T) {
+	server := ollamaStubServer(t, ollamaTagsBody, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"boom"}`))
+	})
+	defer server.Close()
+	setOllamaEnabled(true)
+	defer setOllamaEnabled(true)
+
+	if _, err := ollamaInfer(server.Client(), Config{OllamaURL: server.URL}, "llama3.2:latest", "make an icon", 512, 0); err == nil {
+		t.Fatal("expected error for failed /api/generate")
+	}
+}
+
+func TestTryPhotoModelUsesOllamaAndNotWorker(t *testing.T) {
+	var generateBody map[string]any
+	ollama := ollamaStubServer(t, ollamaTagsBody, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&generateBody); err != nil {
+			t.Errorf("decode ollama body: %v", err)
+			return
+		}
+		_, _ = w.Write([]byte(`{"response":"{\"svg\":\"<svg id='model'></svg>\"}"}`))
+	})
+	defer ollama.Close()
+	workerCalls := 0
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		workerCalls++
+		t.Errorf("ML worker must not be called on an Ollama path: %s %s", r.Method, r.URL.Path)
+	}))
+	defer worker.Close()
+	var processBody map[string]any
+	rust := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/process-svg" {
+			t.Errorf("unexpected rust path: %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&processBody); err != nil {
+			t.Errorf("decode rust body: %v", err)
+			return
+		}
+		_, _ = w.Write([]byte(`{"svg":"<svg id='final'></svg>","extracted_colors":["#fff"],"path_count":2,"byte_size":20,"processing_ms":3}`))
+	}))
+	defer rust.Close()
+	setOllamaEnabled(true)
+	defer setOllamaEnabled(true)
+
+	cfg := Config{OllamaURL: ollama.URL, MLWorkerURL: worker.URL, RustEngineURL: rust.URL}
+	result, model, pipeline, warning, err := tryPhotoModel(
+		worker.Client(), rust.Client(), cfg,
+		ImageToSvgRequest{
+			Engine: "ollama", ModelID: "llama3.2:latest", Pipeline: "direct-svg",
+			Mode: "colored-line-art", Filename: "cat.png", Palette: []string{"#333333"},
+		},
+		[]string{"#111111"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if workerCalls != 0 {
+		t.Errorf("ML worker called %d times", workerCalls)
+	}
+	if model != "llama3.2:latest" || pipeline != "direct-svg" || warning != "" {
+		t.Errorf("metadata = %q %q %q", model, pipeline, warning)
+	}
+	if result.SVG != "<svg id='final'></svg>" {
+		t.Errorf("svg = %q", result.SVG)
+	}
+	if raw, _ := processBody["raw_svg"].(string); !strings.Contains(raw, "<svg id='model'>") {
+		t.Errorf("rust process body = %+v", processBody)
+	}
+	if prompt, _ := generateBody["prompt"].(string); !strings.Contains(prompt, "cat.png") || !strings.Contains(prompt, "#111111") {
+		t.Errorf("ollama prompt = %q", prompt)
+	}
+}
+
+func TestTryPhotoModelOllamaFailureReturnsError(t *testing.T) {
+	ollama := ollamaStubServer(t, ollamaTagsBody, func(w http.ResponseWriter, r *http.Request) {
+		t.Error("generate must not be called for an unknown model")
+	})
+	defer ollama.Close()
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("ML worker must not be called: %s %s", r.Method, r.URL.Path)
+	}))
+	defer worker.Close()
+	rust := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("Rust must not be called on Ollama failure: %s %s", r.Method, r.URL.Path)
+	}))
+	defer rust.Close()
+	setOllamaEnabled(true)
+	defer setOllamaEnabled(true)
+
+	cfg := Config{OllamaURL: ollama.URL, MLWorkerURL: worker.URL, RustEngineURL: rust.URL}
+	result, model, pipeline, warning, err := tryPhotoModel(
+		worker.Client(), rust.Client(), cfg,
+		ImageToSvgRequest{Engine: "ollama", ModelID: "missing/model", Pipeline: "direct-svg", Mode: "colored-line-art"},
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "missing/model") {
+		t.Errorf("error = %v, want unknown-model error", err)
+	}
+	if result.SVG != "" || model != "" || pipeline != "" || warning != "" {
+		t.Errorf("failure returned fallback metadata: %+v %q %q %q", result, model, pipeline, warning)
 	}
 }

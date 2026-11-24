@@ -155,6 +155,7 @@ type GenerateRequest struct {
 	SystemPrompt   string   `json:"system_prompt,omitempty"`
 	NegativePrompt string   `json:"negative_prompt,omitempty"`
 	ModelID        string   `json:"model_id"`
+	Engine         string   `json:"engine,omitempty"`
 	Pipeline       string   `json:"pipeline"` // "direct-svg" | "diffusion-vtracer" | "neural-vtracer"
 	Style          string   `json:"style"`
 	Palette        []string `json:"palette,omitempty"`
@@ -234,6 +235,7 @@ type ImageToSvgRequest struct {
 	Palette          []string `json:"palette,omitempty"`
 	UseCustomPalette bool     `json:"use_custom_palette,omitempty"`
 	ModelID          string   `json:"model_id,omitempty"`
+	Engine           string   `json:"engine,omitempty"`
 	Pipeline         string   `json:"pipeline,omitempty"`
 }
 
@@ -611,7 +613,14 @@ func main() {
 		warnings := []string{}
 		fallbackUsed := false
 		var mlResp MLInferResponse
-		if err := postJSON(inferenceClient, cfg.MLWorkerURL+"/infer", mlReq, &mlResp); err != nil {
+		if req.Engine == "ollama" {
+			ollamaResp, err := ollamaInfer(inferenceClient, cfg, req.ModelID, req.Prompt, req.MaxNewTokens, req.Temperature)
+			if err != nil {
+				writeError(w, http.StatusUnprocessableEntity, "Ollama generation failed: "+err.Error())
+				return
+			}
+			mlResp = ollamaResp
+		} else if err := postJSON(inferenceClient, cfg.MLWorkerURL+"/infer", mlReq, &mlResp); err != nil {
 			warnings = append(warnings, fallbackWarning("worker", err.Error()))
 			fallbackUsed = true
 			mlResp = nativeMLInfer(mlReq)
@@ -733,7 +742,11 @@ func main() {
 
 		modelID, pipeline, warning := "pytorch-lineart + rust-vtracer", "photo-lineart-vtracer", ""
 		if req.ModelID != "" {
-			modelResult, usedModel, usedPipeline, modelWarning := tryPhotoModel(inferenceClient, httpClient, cfg, req, rustResp.ExtractedColors)
+			modelResult, usedModel, usedPipeline, modelWarning, modelErr := tryPhotoModel(inferenceClient, httpClient, cfg, req, rustResp.ExtractedColors)
+			if modelErr != nil {
+				writeError(w, http.StatusUnprocessableEntity, "Ollama generation failed: "+modelErr.Error())
+				return
+			}
 			modelID, pipeline, warning, _ = resolveModelMetadata(req.ModelID, usedPipeline, modelID, pipeline, usedModel, modelWarning)
 			if usedModel != "" {
 				rustResp = modelResult
@@ -822,7 +835,11 @@ func main() {
 
 		usedModel, usedPipeline, modelWarning := "", "", ""
 		if req.ModelID != "" {
-			modelResp, model, pipeline, warning := tryEditModel(inferenceClient, httpClient, cfg, req, req.SVG)
+			modelResp, model, pipeline, warning, modelErr := tryEditModel(inferenceClient, httpClient, cfg, req, req.SVG)
+			if modelErr != nil {
+				writeError(w, http.StatusUnprocessableEntity, "Ollama generation failed: "+modelErr.Error())
+				return
+			}
 			usedModel, usedPipeline, modelWarning = model, pipeline, warning
 			if usedModel != "" {
 				rustResp = modelResp

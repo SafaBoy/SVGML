@@ -73,11 +73,20 @@ func resolveModelMetadata(requestedModel, requestedPipeline, stableModel, stable
 	return stableModel, stablePipeline, modelFallbackWarning(requestedModel, reason), false
 }
 
-func tryPhotoModel(inferenceClient, rustClient *http.Client, cfg Config, req ImageToSvgRequest, fallbackColors []string) (RustSvgResponse, string, string, string) {
-	inferReq := buildPhotoModelInferRequest(req, fallbackColors)
+func tryPhotoModel(inferenceClient, rustClient *http.Client, cfg Config, req ImageToSvgRequest, fallbackColors []string) (RustSvgResponse, string, string, string, error) {
 	var inferResp MLInferResponse
-	if err := postJSON(inferenceClient, cfg.MLWorkerURL+"/infer", inferReq, &inferResp); err != nil {
-		return RustSvgResponse{}, "", "", modelFallbackWarning(req.ModelID, err.Error())
+	if req.Engine == "ollama" {
+		prompt := buildPhotoModelPrompt(req.Mode, req.Filename, fallbackColors, req.Palette)
+		var err error
+		inferResp, err = ollamaInfer(inferenceClient, cfg, req.ModelID, prompt, 512, 0)
+		if err != nil {
+			return RustSvgResponse{}, "", "", "", err
+		}
+	} else {
+		inferReq := buildPhotoModelInferRequest(req, fallbackColors)
+		if err := postJSON(inferenceClient, cfg.MLWorkerURL+"/infer", inferReq, &inferResp); err != nil {
+			return RustSvgResponse{}, "", "", modelFallbackWarning(req.ModelID, err.Error()), nil
+		}
 	}
 	vectorReq := RustVectorizeRequest{
 		ColorPrecision: req.ColorPrecision,
@@ -86,22 +95,37 @@ func tryPhotoModel(inferenceClient, rustClient *http.Client, cfg Config, req Ima
 	}
 	result, err := rustSVGFromModelOutput(rustClient, cfg.RustEngineURL, inferResp.Mode, inferResp.RawSVG, inferResp.ImageBase64, vectorReq)
 	if err != nil {
-		return RustSvgResponse{}, "", "", modelFallbackWarning(req.ModelID, err.Error())
+		if req.Engine == "ollama" {
+			return RustSvgResponse{}, "", "", "", err
+		}
+		return RustSvgResponse{}, "", "", modelFallbackWarning(req.ModelID, err.Error()), nil
 	}
-	return result, inferResp.ModelUsed, req.Pipeline, ""
+	return result, inferResp.ModelUsed, req.Pipeline, "", nil
 }
 
-func tryEditModel(inferenceClient, rustClient *http.Client, cfg Config, req EnhanceSvgRequest, originalSVG string) (RustSvgResponse, string, string, string) {
-	inferReq := buildEditModelInferRequest(req, originalSVG)
+func tryEditModel(inferenceClient, rustClient *http.Client, cfg Config, req EnhanceSvgRequest, originalSVG string) (RustSvgResponse, string, string, string, error) {
 	var inferResp MLInferResponse
-	if err := postJSON(inferenceClient, cfg.MLWorkerURL+"/infer", inferReq, &inferResp); err != nil {
-		return RustSvgResponse{}, "", "", modelFallbackWarning(req.ModelID, err.Error())
+	if req.Engine == "ollama" {
+		prompt := buildEditModelPrompt(originalSVG, req.Mode, req.Instruction, req.Palette)
+		var err error
+		inferResp, err = ollamaInfer(inferenceClient, cfg, req.ModelID, prompt, 512, 0)
+		if err != nil {
+			return RustSvgResponse{}, "", "", "", err
+		}
+	} else {
+		inferReq := buildEditModelInferRequest(req, originalSVG)
+		if err := postJSON(inferenceClient, cfg.MLWorkerURL+"/infer", inferReq, &inferResp); err != nil {
+			return RustSvgResponse{}, "", "", modelFallbackWarning(req.ModelID, err.Error()), nil
+		}
 	}
 	result, err := rustSVGFromModelOutput(rustClient, cfg.RustEngineURL, inferResp.Mode, inferResp.RawSVG, inferResp.ImageBase64, RustVectorizeRequest{})
 	if err != nil {
-		return RustSvgResponse{}, "", "", modelFallbackWarning(req.ModelID, err.Error())
+		if req.Engine == "ollama" {
+			return RustSvgResponse{}, "", "", "", err
+		}
+		return RustSvgResponse{}, "", "", modelFallbackWarning(req.ModelID, err.Error()), nil
 	}
-	return result, inferResp.ModelUsed, req.Pipeline, ""
+	return result, inferResp.ModelUsed, req.Pipeline, "", nil
 }
 
 func rustSVGFromModelOutput(client *http.Client, rustBaseURL, mode, rawSVG, imageBase64 string, vectorReq RustVectorizeRequest) (RustSvgResponse, error) {
