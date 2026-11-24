@@ -712,8 +712,31 @@ def _place_model(model: Any, model_id: str) -> str:
     return device
 
 
+def _evict_other_gpu_models(keep_model_id: str) -> None:
+    """Move cached models other than keep_model_id off the GPU."""
+    if DEVICE != "cuda":
+        return
+    moved = False
+    for cache in (LOADED_TEXT_MODELS, LOADED_VLM_MODELS):
+        for model_id, (_, model) in list(cache.items()):
+            if model_id == keep_model_id or MODEL_DEVICE.get(model_id) != "cuda":
+                continue
+            model.to("cpu")
+            MODEL_DEVICE[model_id] = "cpu"
+            moved = True
+    for model_id, pipe in list(LOADED_DIFFUSION_MODELS.items()):
+        if model_id == keep_model_id or MODEL_DEVICE.get(model_id) != "cuda":
+            continue
+        pipe.to("cpu")
+        MODEL_DEVICE[model_id] = "cpu"
+        moved = True
+    if moved:
+        torch.cuda.empty_cache()
+
+
 def load_hf_text_model(model_id: str) -> tuple:
     if model_id not in LOADED_TEXT_MODELS:
+        _evict_other_gpu_models(model_id)
         logger.info("Loading Hugging Face text-to-SVG model: %s on %s", model_id, DEVICE)
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
         model = AutoModelForCausalLM.from_pretrained(
@@ -722,12 +745,19 @@ def load_hf_text_model(model_id: str) -> tuple:
         logger.info("Text-to-SVG model %s placed on %s", model_id, _place_model(model, model_id))
         model.eval()
         LOADED_TEXT_MODELS[model_id] = (tokenizer, model)
+    elif MODEL_DEVICE.get(model_id) != DEVICE:
+        _evict_other_gpu_models(model_id)
+        model = LOADED_TEXT_MODELS[model_id][1]
+        logger.info(
+            "Restoring cached text-to-SVG model %s on %s", model_id, _place_model(model, model_id)
+        )
     return LOADED_TEXT_MODELS[model_id]
 
 
 def load_hf_vlm(model_id: str) -> tuple:
     """Load a vision-language SVG model (e.g. a Qwen2.5-VL fine-tune) as a VLM, not a causal LM."""
     if model_id not in LOADED_VLM_MODELS:
+        _evict_other_gpu_models(model_id)
         try:
             from transformers import AutoModelForImageTextToText as VLMClass
         except ImportError:
@@ -740,6 +770,10 @@ def load_hf_vlm(model_id: str) -> tuple:
         logger.info("Vision-language model %s placed on %s", model_id, _place_model(model, model_id))
         model.eval()
         LOADED_VLM_MODELS[model_id] = (processor, model)
+    elif MODEL_DEVICE.get(model_id) != DEVICE:
+        _evict_other_gpu_models(model_id)
+        model = LOADED_VLM_MODELS[model_id][1]
+        logger.info("Restoring cached vision-language model %s on %s", model_id, _place_model(model, model_id))
     return LOADED_VLM_MODELS[model_id]
 
 
@@ -929,15 +963,22 @@ def run_hf_diffusion(
     seed: int,
 ) -> str:
     if model_id not in LOADED_DIFFUSION_MODELS:
+        _evict_other_gpu_models(model_id)
         logger.info("Loading Hugging Face Diffusion model: %s on %s", model_id, DEVICE)
         use_fp16 = CUDA_AVAILABLE and torch.cuda.get_device_capability(0)[0] >= 7
         dtype = torch.float16 if use_fp16 else torch.float32
         pipe = AutoPipelineForText2Image.from_pretrained(model_id, torch_dtype=dtype)
         pipe = pipe.to(DEVICE)
+        MODEL_DEVICE[model_id] = DEVICE
         LOADED_DIFFUSION_MODELS[model_id] = pipe
+    elif MODEL_DEVICE.get(model_id) != DEVICE:
+        _evict_other_gpu_models(model_id)
+        logger.info("Restoring cached Diffusion model %s on %s", model_id, DEVICE)
+        LOADED_DIFFUSION_MODELS[model_id] = LOADED_DIFFUSION_MODELS[model_id].to(DEVICE)
+        MODEL_DEVICE[model_id] = DEVICE
 
     pipe = LOADED_DIFFUSION_MODELS[model_id]
-    generator = torch.Generator(device=DEVICE).manual_seed(seed)
+    generator = torch.Generator(device=MODEL_DEVICE.get(model_id, DEVICE)).manual_seed(seed)
     enriched_prompt = f"{prompt}, flat vector icon illustration, vibrant colors, clean minimal shapes, crisp edges"
     neg = negative_prompt or "photo, blurry, noisy, grainy, watermark, text, monochrome"
     result = pipe(
