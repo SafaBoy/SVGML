@@ -150,6 +150,7 @@ class InferResponse(BaseModel):
     backend_used: str
     device: str
     inference_ms: int
+    quality_warning: str = ""
 
 
 class DownloadModelRequest(BaseModel):
@@ -299,6 +300,11 @@ def health():
         "device": DEVICE,
         "transformers_available": TRANSFORMERS_AVAILABLE,
         "diffusers_available": DIFFUSERS_AVAILABLE,
+        "vram_total_mb": (
+            torch.cuda.get_device_properties(0).total_memory // (1024 * 1024)
+            if CUDA_AVAILABLE
+            else 0
+        ),
         "loaded_models": list(LOADED_TEXT_MODELS.keys())
         + list(LOADED_DIFFUSION_MODELS.keys())
         + list(LOADED_VLM_MODELS.keys()),
@@ -534,6 +540,7 @@ def infer(req: InferRequest):
                     backend_used=f"pytorch-hf-transformers ({req.model_id})",
                     device=MODEL_DEVICE.get(req.model_id, DEVICE),
                     inference_ms=elapsed_ms,
+                    quality_warning=check_svg_quality(raw_svg, req.prompt),
                 )
         except Exception as exc:
             hf_skip_reason = f"{type(exc).__name__}: {exc}"
@@ -736,12 +743,77 @@ def load_hf_vlm(model_id: str) -> tuple:
     return LOADED_VLM_MODELS[model_id]
 
 
+# Longest terms first so "navy blue" is not reported twice as "navy" and "blue".
+_COLOR_HEX = {
+    "navy blue": "#000080",
+    "light blue": "#ADD8E6",
+    "dark green": "#006400",
+    "light green": "#90EE90",
+    "hot pink": "#FF69B4",
+    "white": "#FFFFFF",
+    "black": "#000000",
+    "yellow": "#FFFF00",
+    "orange": "#FFA500",
+    "purple": "#800080",
+    "magenta": "#FF00FF",
+    "cyan": "#00FFFF",
+    "brown": "#A52A2A",
+    "indigo": "#4B0082",
+    "silver": "#C0C0C0",
+    "lavender": "#E6E6FA",
+    "green": "#008000",
+    "blue": "#0000FF",
+    "pink": "#FFC0CB",
+    "gray": "#808080",
+    "grey": "#808080",
+    "gold": "#FFD700",
+    "teal": "#008080",
+    "navy": "#000080",
+    "red": "#FF0000",
+}
+
+
+def prompt_color_terms(prompt: str) -> List[str]:
+    """Return colour words explicitly requested in the prompt, longest term first."""
+    text = (prompt or "").lower()
+    found: List[str] = []
+    for term in _COLOR_HEX:
+        if not re.search(r"(?<![a-z])" + re.escape(term) + r"(?![a-z])", text):
+            continue
+        if any(term in longer for longer in found):
+            continue
+        found.append(term)
+    return found
+
+
+def check_svg_quality(svg: str, prompt: str) -> str:
+    """Warn when an SVG is too sparse or ignores colours the prompt asked for."""
+    markup = re.sub(r"<!--.*?-->", "", svg or "", flags=re.DOTALL).lower()
+    shape_count = len(
+        re.findall(r"<(?:path|rect|circle|polygon|ellipse|line)\b", markup)
+    )
+    issues: List[str] = []
+    if shape_count < 3:
+        issues.append(f"only {shape_count} shapes")
+    for term in prompt_color_terms(prompt):
+        if term not in markup and _COLOR_HEX[term].lower() not in markup:
+            issues.append(f"requested color '{term}' not found")
+    return "; ".join(issues)
+
+
 def _svg_instruction(prompt: str, style: str, palette: List[str]) -> str:
-    return (
+    instruction = (
         f"Create a complete standalone SVG illustration for: {prompt}.\n"
         f"Style: {style}. Use this color palette: {', '.join(palette)}.\n"
         "Return only the SVG document: start with <svg and end with </svg>."
     )
+    terms = prompt_color_terms(prompt)
+    if terms:
+        instruction += (
+            f"\nExplicit colors in the prompt ({', '.join(terms)}) "
+            "take precedence over the Style and palette above."
+        )
+    return instruction
 
 
 def _apply_chat_template(holder: Any, system_prompt: str, instruction: str, vision: bool) -> str:
