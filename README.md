@@ -131,6 +131,16 @@ cd ml-worker && .venv/bin/python -m unittest discover -s tests -t .
 ./scripts/stop.sh
 ```
 
+### Maintenance scripts
+To return the checkout to a vanilla state, run `./scripts/clean-desk.sh` (or
+`./scripts/clean-desk.ps1 -Yes` on Windows). It stops only this project's Docker Compose
+containers and removes local build/runtime artifacts: `.run`, logs and PIDs, `frontend/dist`,
+`frontend/node_modules`, `backend-rust/target`, `backend-go/backend-go`, `bin`, `dist`,
+`ml-worker/.venv`, generated `backend-go/embedded/*` files and `data/gallery.json`.
+The Hugging Face model cache, `.env` files, named volumes and unrelated Docker data are
+preserved. Pass `--yes` on Bash to skip the confirmation prompt. Neither clean script is a
+replacement for `scripts/stop.sh` when you only need to stop services.
+
 GitHub Actions (`.github/workflows/ci.yml`) runs the same checks on every push and pull request:
 `go build`/`go vet`/`go test`, `cargo build --release --locked`/`cargo test`, the frontend production
 build, and the ML worker unit tests.
