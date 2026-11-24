@@ -303,7 +303,8 @@ export function rankPromptAddons(
   return PROMPT_ADDONS.map((addon, index) => {
     let score = 0;
     for (const tag of addon.tags) {
-      if (context.has(tag.toLowerCase())) score += 1;
+      const parts = tag.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+      if (parts.length > 0 && parts.every((part) => context.has(part))) score += 1;
     }
     if (addon.styles?.some((candidate) => context.has(candidate.toLowerCase()))) score += 2;
     return { ...addon, score, index };

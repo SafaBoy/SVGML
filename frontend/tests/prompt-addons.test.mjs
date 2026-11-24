@@ -41,6 +41,16 @@ test('ranking matches whole words only', () => {
   assert.ok((robot.find((a) => a.tags.includes('robot'))?.score ?? 0) > 0);
 });
 
+test('ranking matches hyphenated tags from separate prompt words', () => {
+  const ranked = rankPromptAddons(
+    'a wide view showing negative space with fine line art',
+    'unknown-style',
+    'unknown-pipeline'
+  );
+  assert.ok((ranked.find((a) => a.id === 'composition-negative-space')?.score ?? 0) > 0);
+  assert.ok((ranked.find((a) => a.id === 'texture-paper')?.score ?? 0) > 0);
+});
+
 test('ranking falls back to catalog order when nothing matches', () => {
   const ranked = rankPromptAddons('zzzz', 'unknown-style', 'unknown-pipeline');
   assert.ok(ranked.every((item) => item.score === 0));
