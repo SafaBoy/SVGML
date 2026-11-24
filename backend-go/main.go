@@ -445,15 +445,40 @@ func main() {
 		})
 	})
 
-	// Curated HF models endpoint
+	// Curated models endpoint (HF cache plus external engines)
 	mux.HandleFunc("/api/models/curated", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"models": modelsWithVRAMFit(curatedModels),
+			"models": mergeModelLists(modelsWithVRAMFit(curatedModels), ollamaModels(httpClient, cfg)),
 		})
+	})
+
+	// External engine settings (currently Ollama only)
+	mux.HandleFunc("/api/engines/ollama", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			models := ollamaModels(httpClient, cfg)
+			writeJSON(w, http.StatusOK, ollamaDiagnostics(httpClient, cfg, models))
+		case http.MethodPost:
+			var payload struct {
+				Enabled bool `json:"enabled"`
+			}
+			if !decodeJSONBody(w, r, &payload, "Invalid JSON: ") {
+				return
+			}
+			setOllamaEnabled(payload.Enabled)
+			models := ollamaModels(httpClient, cfg)
+			writeJSON(w, http.StatusOK, ollamaDiagnostics(httpClient, cfg, models))
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "GET or POST required")
+		}
 	})
 
 	// Hugging Face model cache & download status endpoint (proxied to Python ML worker with native fallback)
 	mux.HandleFunc("/api/models/status", func(w http.ResponseWriter, r *http.Request) {
+		externalModels := ollamaModels(httpClient, cfg)
+		externalStatuses := ollamaStatuses(httpClient, cfg)
+		diagnostics := ollamaDiagnostics(httpClient, cfg, externalModels)
+
 		resp, err := httpClient.Get(cfg.MLWorkerURL + "/models/status")
 		if err != nil {
 			unavailable := make(map[string]any)
@@ -468,9 +493,10 @@ func main() {
 				}
 			}
 			writeJSON(w, http.StatusOK, map[string]any{
-				"models": unavailable,
+				"models": mergeModelStatuses(unavailable, externalStatuses),
 				"device": "native-cpu",
 				"source": "native-fallback",
+				"ollama": diagnostics,
 			})
 			return
 		}
@@ -478,13 +504,20 @@ func main() {
 		var payload map[string]any
 		if decodeErr := json.NewDecoder(resp.Body).Decode(&payload); decodeErr != nil {
 			writeJSON(w, http.StatusOK, map[string]any{
-				"models": map[string]any{},
+				"models": mergeModelStatuses(map[string]any{}, externalStatuses),
 				"source": "ml-worker",
 				"error":  "invalid /models/status response: " + decodeErr.Error(),
+				"ollama": diagnostics,
 			})
 			return
 		}
+		base, ok := payload["models"].(map[string]any)
+		if !ok {
+			base = map[string]any{}
+		}
+		payload["models"] = mergeModelStatuses(base, externalStatuses)
 		payload["source"] = "ml-worker"
+		payload["ollama"] = diagnostics
 		writeJSON(w, http.StatusOK, payload)
 	})
 

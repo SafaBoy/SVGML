@@ -109,3 +109,52 @@ func TestOllamaStatusesMarksTagsReady(t *testing.T) {
 		t.Errorf("sizes = %v/%v", entry["downloaded_mb"], entry["total_mb"])
 	}
 }
+
+func TestCuratedMergeIncludesOllama(t *testing.T) {
+	hf := []CuratedModel{{ID: "hf/model", Name: "HF model", Source: "hf"}}
+	external := []CuratedModel{{ID: "llama3.2:latest", Name: "llama3.2:latest", Source: "ollama"}}
+
+	merged := mergeModelLists(hf, external)
+	if len(merged) != len(hf)+1 {
+		t.Fatalf("merged count = %d, want %d", len(merged), len(hf)+1)
+	}
+	if merged[0].ID != "hf/model" {
+		t.Errorf("first model = %+v, want untouched HF entry", merged[0])
+	}
+	if merged[1].ID != "llama3.2:latest" || merged[1].Source != "ollama" {
+		t.Errorf("external model = %+v", merged[1])
+	}
+	if len(hf) != 1 {
+		t.Errorf("input slice mutated: %+v", hf)
+	}
+}
+
+func TestStatusMergeKeepsWorkerModels(t *testing.T) {
+	base := map[string]any{
+		"models": map[string]any{
+			"hf/model": map[string]any{"status": "ready", "source": "ml-worker"},
+		},
+		"source": "ml-worker",
+	}
+	external := map[string]any{
+		"llama3.2:latest": map[string]any{"status": "ready", "source": "ollama"},
+	}
+
+	merged := mergeModelStatuses(base["models"].(map[string]any), external)
+	if len(merged) != 2 {
+		t.Fatalf("merged statuses = %+v, want 2 keys", merged)
+	}
+	for _, id := range []string{"hf/model", "llama3.2:latest"} {
+		entry, ok := merged[id].(map[string]any)
+		if !ok || entry["status"] != "ready" {
+			t.Errorf("status for %q = %+v", id, merged[id])
+		}
+	}
+	base["models"] = merged
+	if base["source"] != "ml-worker" {
+		t.Errorf("source = %v, want ml-worker", base["source"])
+	}
+	if len(base["models"].(map[string]any)) != 2 {
+		t.Errorf("worker payload = %+v", base)
+	}
+}

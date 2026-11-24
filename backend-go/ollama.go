@@ -115,3 +115,29 @@ func ollamaReachable(client *http.Client, cfg Config) bool {
 	_, err := ollamaListModels(client, cfg.OllamaURL)
 	return err == nil
 }
+
+func mergeModelLists(hf, external []CuratedModel) []CuratedModel {
+	merged := make([]CuratedModel, 0, len(hf)+len(external))
+	merged = append(merged, hf...)
+	return append(merged, external...)
+}
+
+func mergeModelStatuses(base, external map[string]any) map[string]any {
+	merged := make(map[string]any, len(base)+len(external))
+	for id, status := range base {
+		merged[id] = status
+	}
+	for id, status := range external {
+		merged[id] = status
+	}
+	return merged
+}
+
+func ollamaDiagnostics(client *http.Client, cfg Config, models []CuratedModel) map[string]any {
+	return map[string]any{
+		"enabled":     getOllamaEnabled(),
+		"base_url":    cfg.OllamaURL,
+		"reachable":   ollamaReachable(client, cfg),
+		"model_count": len(models),
+	}
+}
