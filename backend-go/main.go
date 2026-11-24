@@ -398,6 +398,10 @@ func main() {
 
 	store := NewGalleryStore(cfg.DataDir)
 	httpClient := &http.Client{Timeout: 180 * time.Second}
+	// Model loading and CPU fallback can take much longer than health/status
+	// probes, so inference gets its own longer ceiling. A slow request must not
+	// hit the timeout before nginx's proxy_read_timeout (600s) does.
+	inferenceClient := &http.Client{Timeout: 600 * time.Second}
 
 	mux := http.NewServeMux()
 
@@ -567,7 +571,7 @@ func main() {
 		warnings := []string{}
 		fallbackUsed := false
 		var mlResp MLInferResponse
-		if err := postJSON(httpClient, cfg.MLWorkerURL+"/infer", mlReq, &mlResp); err != nil {
+		if err := postJSON(inferenceClient, cfg.MLWorkerURL+"/infer", mlReq, &mlResp); err != nil {
 			warnings = append(warnings, fallbackWarning("worker", err.Error()))
 			fallbackUsed = true
 			mlResp = nativeMLInfer(mlReq)
@@ -657,7 +661,7 @@ func main() {
 
 		// Step 1: Send photo to Python CUDA GPU worker for colored line-art & quantization (or native Go fallback)
 		var mlResp MLLineArtResponse
-		if err := postJSON(httpClient, cfg.MLWorkerURL+"/image-to-lineart", req, &mlResp); err != nil {
+		if err := postJSON(inferenceClient, cfg.MLWorkerURL+"/image-to-lineart", req, &mlResp); err != nil {
 			var nErr error
 			mlResp, nErr = nativeImageToLineArt(req)
 			if nErr != nil {
@@ -749,7 +753,7 @@ func main() {
 
 		// Step 1: Call Python CUDA ML Enhancer (or native Go fallback)
 		var mlResp MLEnhanceResponse
-		if err := postJSON(httpClient, cfg.MLWorkerURL+"/enhance-svg", req, &mlResp); err != nil {
+		if err := postJSON(inferenceClient, cfg.MLWorkerURL+"/enhance-svg", req, &mlResp); err != nil {
 			mlResp = nativeEnhanceSvg(req)
 		}
 

@@ -694,8 +694,41 @@ def _model_dtype():
     return torch.float16 if use_fp16 else torch.float32
 
 
+def _model_size_bytes(model: Any) -> int:
+    """Total parameter/buffer bytes, or 0 when the object is not a torch module."""
+    parameters = getattr(model, "parameters", None)
+    buffers = getattr(model, "buffers", None)
+    if not callable(parameters) or not callable(buffers):
+        return 0
+    return sum(
+        tensor.numel() * tensor.element_size()
+        for tensor in list(parameters()) + list(buffers())
+    )
+
+
+def _gpu_has_room(model: Any, headroom: float = 1.25) -> bool:
+    """Avoid a doomed OOM round-trip when the model clearly will not fit on CUDA."""
+    if DEVICE != "cuda":
+        return False
+    size = _model_size_bytes(model)
+    if not size:
+        return True
+    try:
+        free, _ = torch.cuda.mem_get_info()
+    except Exception:
+        # Preflight is best-effort; fall back to the existing OOM retry path.
+        return True
+    return free >= int(size * headroom)
+
+
 def _place_model(model: Any, model_id: str) -> str:
     """Move a model to the GPU, falling back to CPU when the GPU is full."""
+    if DEVICE == "cuda" and not _gpu_has_room(model):
+        logger.info(
+            "Model %s needs more GPU memory than is free; keeping it on CPU", model_id
+        )
+        MODEL_DEVICE[model_id] = "cpu"
+        return "cpu"
     try:
         model.to(DEVICE)
         device = DEVICE
@@ -705,8 +738,10 @@ def _place_model(model: Any, model_id: str) -> str:
         logger.warning(
             "Not enough GPU memory for %s (%s); running it on CPU instead", model_id, exc
         )
-        torch.cuda.empty_cache()
         model.to(device="cpu", dtype=torch.float32)
+        # Release the allocator cache only after the GPU tensors are gone; doing it
+        # earlier leaves stale reservations that block the next model from loading.
+        torch.cuda.empty_cache()
         device = "cpu"
     MODEL_DEVICE[model_id] = device
     return device
@@ -938,8 +973,8 @@ def run_hf_direct_svg(
         logger.warning(
             "GPU generation failed for %s (%s); retrying on CPU", model_id, short_reason(exc)
         )
-        torch.cuda.empty_cache()
         model.to(device="cpu", dtype=torch.float32)
+        torch.cuda.empty_cache()
         MODEL_DEVICE[model_id] = "cpu"
         inputs = {key: value.to("cpu") for key, value in inputs.items() if hasattr(value, "to")}
         outputs = generate_once()

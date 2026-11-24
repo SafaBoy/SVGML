@@ -154,5 +154,57 @@ class ModelEvictionTests(unittest.TestCase):
         self.assertEqual(selected.generator.device, "cuda")
 
 
+    def test_oversized_model_stays_on_cpu_without_an_oom_round_trip(self):
+        fake = FakeModel()
+        with mock.patch.object(app, "CUDA_AVAILABLE", True), mock.patch.object(
+            app, "_model_size_bytes", return_value=4_000_000_000
+        ), mock.patch.object(
+            app.torch.cuda, "mem_get_info", return_value=(1_000_000_000, 4_000_000_000)
+        ):
+            device = app._place_model(fake, "oversized")
+
+        self.assertEqual(device, "cpu")
+        self.assertEqual(app.MODEL_DEVICE["oversized"], "cpu")
+        self.assertEqual(fake.moves, [])
+        self.empty_cache.assert_not_called()
+
+    def test_model_that_fits_is_still_loaded_on_gpu(self):
+        fake = FakeModel()
+        with mock.patch.object(app, "CUDA_AVAILABLE", True), mock.patch.object(
+            app, "_model_size_bytes", return_value=100_000_000
+        ), mock.patch.object(
+            app.torch.cuda, "mem_get_info", return_value=(4_000_000_000, 4_000_000_000)
+        ):
+            device = app._place_model(fake, "small")
+
+        self.assertEqual(device, "cuda")
+        self.assertEqual(app.MODEL_DEVICE["small"], "cuda")
+        self.assertIn(("cuda", None), fake.moves)
+
+    def test_oom_fallback_clears_cache_after_the_model_leaves_gpu(self):
+        events = []
+
+        class OomModel(FakeModel):
+            def to(self, device=None, dtype=None):
+                events.append(("to", device))
+                if device == "cuda":
+                    raise RuntimeError("CUDA out of memory")
+                return super().to(device=device, dtype=dtype)
+
+        fake = OomModel()
+        self.empty_cache.side_effect = lambda: events.append(("empty_cache", None))
+        with mock.patch.object(app, "CUDA_AVAILABLE", True), mock.patch.object(
+            app, "_model_size_bytes", return_value=100_000_000
+        ), mock.patch.object(
+            app.torch.cuda, "mem_get_info", return_value=(4_000_000_000, 4_000_000_000)
+        ):
+            device = app._place_model(fake, "oom")
+
+        self.assertEqual(device, "cpu")
+        self.assertEqual(
+            events, [("to", "cuda"), ("to", "cpu"), ("empty_cache", None)]
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
